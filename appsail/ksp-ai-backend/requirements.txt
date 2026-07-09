@@ -1,0 +1,14 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+python-dotenv==1.0.1
+anthropic==0.40.0
+python-multipart==0.0.19
+# Catalyst SDK — auto-activates in catalyst.py when CATALYST_* env vars are set.
+zcatalyst-sdk==1.4.0
+# SQL parsing for CTE-safe role-scope injection (_apply_role_policy).
+sqlglot>=25.0.0
+# REST fallbacks for Catalyst services not covered by the SDK.
+# (unpinned — zcatalyst-sdk pins its own compatible requests version)
+requests
+

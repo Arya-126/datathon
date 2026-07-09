@@ -1,0 +1,102 @@
+/* Font */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+Kannada:wght@400;600&display=swap');
+
+body { font-family: 'Inter', system-ui, sans-serif; }
+:lang(kn), .kn { font-family: 'Noto Sans Kannada', 'Inter', sans-serif; }
+
+.nav-btn {
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 8px;
+  color: #cbd5e1;
+  transition: background 0.12s;
+}
+.nav-btn:hover { background: #17233e; color: #fff; }
+.nav-btn.active { background: #1e2c4d; color: #fff; }
+
+.msg {
+  max-width: 78%;
+  padding: 12px 14px;
+  border-radius: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.msg.user {
+  margin-left: auto;
+  background: #1e2c4d;
+  border: 1px solid #24345c;
+}
+.msg.bot {
+  background: #111a2e;
+  border: 1px solid #17233e;
+}
+.msg.bot .prefix { color: #93c5fd; font-weight: 500; margin-bottom: 6px; }
+.msg .sql {
+  margin-top: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  background: #0b1220;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #17233e;
+  color: #cbd5e1;
+  overflow-x: auto;
+}
+
+table.data {
+  width: 100%;
+  font-size: 12.5px;
+  border-collapse: collapse;
+  margin-top: 8px;
+}
+table.data th, table.data td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #17233e;
+  text-align: left;
+}
+table.data th {
+  background: #0b1220;
+  color: #94a3b8;
+  font-weight: 500;
+  text-transform: uppercase;
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+}
+table.data tbody tr:hover { background: #17233e; }
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.badge.spike       { background: #7f1d1d; color: #fecaca; }
+.badge.elevated    { background: #78350f; color: #fed7aa; }
+.badge.new-activity { background: #1e3a8a; color: #bfdbfe; }
+
+.hotspot-card {
+  background: #111a2e;
+  border: 1px solid #17233e;
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.rec-btn {
+  animation: pulse 1.4s infinite;
+  background: #dc2626 !important;
+}
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.6); }
+  50%      { box-shadow: 0 0 0 8px rgba(220, 38, 38, 0); }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1e2c4d; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: #24345c; }

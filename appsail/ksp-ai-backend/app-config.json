@@ -1,0 +1,21 @@
+{
+  "name": "ksp-ai-backend",
+  "stack": "python-3.11",
+  "src_dir": "./",
+  "port": 9000,
+  "start_command": "python -m uvicorn main:app --host 0.0.0.0 --port 9000",
+  "build_command": "pip install --no-cache-dir -r requirements.txt",
+  "env_variables": {
+    "PYTHONUNBUFFERED": "1",
+    "APP_ENV": "catalyst"
+  },
+  "memory": 512,
+  "instances": {
+    "min": 1,
+    "max": 3
+  },
+  "health_check": {
+    "path": "/health",
+    "port": 9000
+  }
+}

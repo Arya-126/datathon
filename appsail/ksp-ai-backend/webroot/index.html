@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KSP Crime AI · Conversational Intelligence</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="/static/styles.css" />
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        ink:   { 900: '#0b1220', 800: '#111a2e', 700: '#17233e', 600: '#1e2c4d' },
+        khaki: { 500: '#c9a35b', 600: '#a8863f' },
+        accent: '#5b8def',
+      },
+      fontFamily: {
+        sans: ['Inter', 'system-ui', 'sans-serif'],
+        mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+      }
+    }
+  }
+}
+</script>
+</head>
+<body class="bg-ink-900 text-slate-100 min-h-screen font-sans antialiased">
+
+<!-- Login overlay -->
+<div id="login" class="fixed inset-0 bg-ink-900/95 backdrop-blur flex items-center justify-center z-50">
+  <div class="w-full max-w-md bg-ink-800 rounded-2xl border border-ink-600 p-8 shadow-2xl">
+    <div class="flex items-center gap-3 mb-6">
+      <div class="w-10 h-10 rounded-lg bg-khaki-500 flex items-center justify-center text-ink-900 font-bold">K</div>
+      <div>
+        <h1 class="text-lg font-semibold">Karnataka State Police</h1>
+        <p class="text-xs text-slate-400">Crime Records Bureau · Conversational Intelligence</p>
+      </div>
+    </div>
+    <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Officer ID</label>
+    <input id="loginUser" class="w-full mb-4 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 focus:border-accent outline-none" placeholder="e.g. KSP-4471" value="KSP-DEMO" />
+    <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Role</label>
+    <select id="loginRole" class="w-full mb-4 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 outline-none">
+      <option value="admin">Admin — full access + audit log</option>
+      <option value="dysp">DySP — district scope, full PII</option>
+      <option value="sho">SHO — single station, full PII</option>
+      <option value="io">Investigating Officer — own cases only</option>
+      <option value="analyst">Analyst — aggregates only, PII refused</option>
+    </select>
+    <div id="scopeDistrict" class="hidden">
+      <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">District</label>
+      <select id="loginDistrict" class="w-full mb-4 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 outline-none"></select>
+    </div>
+    <div id="scopeUnit" class="hidden">
+      <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">District</label>
+      <select id="unitDistrict" class="w-full mb-3 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 outline-none"></select>
+      <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Police Station</label>
+      <select id="loginUnit" class="w-full mb-4 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 outline-none"></select>
+    </div>
+    <div id="scopeEmp" class="hidden">
+      <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">District</label>
+      <select id="empDistrict" class="w-full mb-3 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 outline-none"></select>
+      <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Station</label>
+      <select id="empUnit" class="w-full mb-3 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 outline-none"></select>
+      <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Investigating Officer</label>
+      <select id="loginEmployee" class="w-full mb-4 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 outline-none"></select>
+    </div>
+    <button id="loginBtn" class="w-full mt-2 bg-accent hover:bg-blue-500 text-white font-medium py-2.5 rounded-lg transition">Enter</button>
+    <p class="text-[11px] text-slate-500 mt-4 leading-relaxed">
+      Role-based access is enforced in the query layer. Every action is written to an audit trail. Analyst sessions cannot project PII columns; IO sessions only see their own cases.
+    </p>
+  </div>
+</div>
+
+<!-- Shell -->
+<div class="flex h-screen">
+  <!-- sidebar -->
+  <aside class="w-56 shrink-0 bg-ink-800 border-r border-ink-600 flex flex-col">
+    <div class="px-5 py-5 border-b border-ink-600">
+      <div class="flex items-center gap-2">
+        <div class="w-8 h-8 rounded-lg bg-khaki-500 flex items-center justify-center text-ink-900 font-bold">K</div>
+        <div>
+          <div class="text-sm font-semibold leading-tight">KSP Crime AI</div>
+          <div class="text-[10px] text-slate-400 tracking-wider uppercase">SCRB Bengaluru</div>
+        </div>
+      </div>
+    </div>
+    <nav class="flex-1 px-2 py-3 space-y-1 text-sm">
+      <button data-view="chat"      class="nav-btn active">💬 Chat</button>
+      <button data-view="hotspots"  class="nav-btn">🔥 Hotspots</button>
+      <button data-view="trends"    class="nav-btn">📈 Trends</button>
+      <button data-view="network"   class="nav-btn">🕸 Network</button>
+      <button data-view="insights"  class="nav-btn">🧠 Insights</button>
+      <button data-view="predict"   class="nav-btn">⚠ Early Warnings</button>
+      <button data-view="audit"     class="nav-btn">🧾 Audit Log</button>
+    </nav>
+    <div class="p-3 border-t border-ink-600 text-xs">
+      <div class="text-slate-400">Signed in as</div>
+      <div id="sessLabel" class="font-medium">—</div>
+      <button id="logoutBtn" class="mt-2 text-slate-400 hover:text-white">Sign out ↗</button>
+    </div>
+  </aside>
+
+  <!-- main -->
+  <main class="flex-1 overflow-hidden flex flex-col">
+    <!-- header -->
+    <header class="flex items-center justify-between px-6 py-3 border-b border-ink-600 bg-ink-800">
+      <div>
+        <h2 id="viewTitle" class="text-lg font-semibold">Chat</h2>
+        <p id="viewSubtitle" class="text-xs text-slate-400">Ask in English or Kannada. Voice is supported.</p>
+      </div>
+      <div class="flex items-center gap-2 text-sm">
+        <span id="llmBadge" class="px-2 py-1 rounded bg-ink-700 border border-ink-600 text-[11px] tracking-wider">LLM: —</span>
+        <button id="pdfBtn"  class="px-3 py-1.5 rounded bg-ink-700 hover:bg-ink-600 border border-ink-600">Export PDF</button>
+        <select id="langSel" class="px-2 py-1.5 rounded bg-ink-700 border border-ink-600">
+          <option value="en">EN</option>
+          <option value="kn">ಕನ್ನಡ</option>
+        </select>
+      </div>
+    </header>
+
+    <!-- views -->
+    <section id="view-chat" class="view flex-1 overflow-hidden grid grid-cols-[1fr_360px]">
+      <div class="flex flex-col overflow-hidden">
+        <div id="chatLog" class="flex-1 overflow-y-auto p-6 space-y-4"></div>
+        <div class="border-t border-ink-600 p-4 bg-ink-800">
+          <div class="flex gap-2">
+            <button id="voiceBtn" class="w-11 h-11 rounded-lg bg-ink-700 hover:bg-ink-600 border border-ink-600 flex items-center justify-center" title="Voice input">🎙</button>
+            <textarea id="chatInput" rows="1" class="flex-1 resize-none px-4 py-3 rounded-lg bg-ink-900 border border-ink-600 outline-none focus:border-accent" placeholder="Ask, e.g. 'Which districts had the most cyber crime last quarter?'"></textarea>
+            <button id="sendBtn" class="px-5 rounded-lg bg-accent hover:bg-blue-500 text-white font-medium">Send</button>
+          </div>
+          <div class="text-[11px] text-slate-500 mt-2">Enter to send · Shift+Enter for newline · Kannada input supported</div>
+        </div>
+      </div>
+      <aside class="border-l border-ink-600 bg-ink-800 overflow-y-auto p-5">
+        <h3 class="text-xs uppercase tracking-wider text-slate-400 mb-3">Explainability</h3>
+        <div id="explain" class="text-sm space-y-4">
+          <p class="text-slate-500 italic">The SQL, LLM reasoning, and role-policy notes for the most recent answer will appear here.</p>
+        </div>
+      </aside>
+    </section>
+
+    <section id="view-hotspots" class="view hidden flex-col flex-1 overflow-y-auto p-6">
+      <div class="flex items-center gap-2 mb-4">
+        <button id="hsLevelDistrict" class="px-3 py-1.5 rounded bg-accent text-white text-sm">Districts</button>
+        <button id="hsLevelStation" class="px-3 py-1.5 rounded bg-ink-700 border border-ink-600 text-sm hover:bg-ink-600">Police stations</button>
+        <span class="text-xs text-slate-500 ml-2">Circle size = FIR volume (last 180 days); red tint = heinous share</span>
+      </div>
+      <div id="hotspotMap" class="w-full shrink-0 rounded-lg border border-ink-600 mb-5" style="height: 420px;"></div>
+      <div id="hotspotBody"></div>
+    </section>
+
+    <section id="view-trends" class="view hidden flex-col flex-1 overflow-y-auto p-6">
+      <canvas id="trendChart" class="bg-ink-800 rounded-lg p-4" height="120"></canvas>
+      <p class="text-xs text-slate-400 mt-3">Monthly crime volume by category, last 24 months.</p>
+    </section>
+
+    <section id="view-network" class="view hidden flex-1 overflow-hidden">
+      <div id="networkBody" class="w-full h-full bg-ink-900"></div>
+    </section>
+
+    <section id="view-insights" class="view hidden flex-1 overflow-y-auto p-6">
+      <div id="insightsBody"></div>
+    </section>
+
+    <section id="view-predict" class="view hidden flex-1 overflow-y-auto p-6">
+      <div id="predictBody"></div>
+    </section>
+
+    <section id="view-audit" class="view hidden flex-col flex-1 overflow-y-auto p-6">
+      <div class="flex items-center gap-2 mb-4">
+        <input id="auditFir" class="px-3 py-2 rounded-lg bg-ink-800 border border-ink-600 outline-none focus:border-accent text-sm w-72"
+               placeholder="Reverse lookup: FIR / CrimeNo (e.g. 1044300062026…)" />
+        <button id="auditFirBtn" class="px-3 py-2 rounded bg-ink-700 border border-ink-600 hover:bg-ink-600 text-sm">Who touched this FIR?</button>
+        <button id="auditAllBtn" class="px-3 py-2 rounded bg-ink-700 border border-ink-600 hover:bg-ink-600 text-sm">Show all</button>
+      </div>
+      <div id="auditBody"></div>
+    </section>
+  </main>
+</div>
+
+<script src="/static/config.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
