@@ -1,0 +1,11 @@
+{
+  "client": {
+    "source": "client"
+  },
+  "appsail": [
+    {
+      "name": "ksp-ai-backend",
+      "source": "appsail/ksp-ai-backend"
+    }
+  ]
+}
