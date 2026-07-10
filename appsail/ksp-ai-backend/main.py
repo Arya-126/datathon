@@ -81,6 +81,7 @@ import analytics  # noqa: E402
 import catalyst  # noqa: E402
 import jobs  # noqa: E402
 from db import cursor, init_schema, read_cursor  # noqa: E402
+import llm  # noqa: E402
 from llm import ChatTurn, is_safe_sql, nl_to_sql  # noqa: E402
 from seed import seed  # noqa: E402
 
@@ -155,12 +156,22 @@ class LoginBody(BaseModel):
     district: str | None = None
     unit: str | None = None
     employee_id: int | None = None  # for io scope
+    password: str | None = None     # required only when KSP_DEMO_PASSWORD set
+
+
+# Optional shared demo password. Locally the login form is open (role is
+# self-asserted for the demo); set KSP_DEMO_PASSWORD to gate it. In
+# production identity comes from Catalyst Authentication regardless.
+DEMO_PASSWORD = os.environ.get("KSP_DEMO_PASSWORD", "")
 
 
 @app.post("/login")
 def login(body: LoginBody, request: Request) -> dict:
     if body.role not in ROLE_POLICY:
         raise HTTPException(400, f"unknown role {body.role!r}")
+    if DEMO_PASSWORD and not secrets.compare_digest(
+            body.password or "", DEMO_PASSWORD):
+        raise HTTPException(401, "invalid demo password")
     policy = ROLE_POLICY[body.role]
     session: dict = {"user_id": body.user_id, "role": body.role}
 
@@ -293,6 +304,16 @@ AGGREGATE_RE = re.compile(
     r"\b(count|sum|avg|min|max)\s*\(", re.IGNORECASE,
 )
 LIMIT_RE = re.compile(r"\blimit\b", re.IGNORECASE)
+
+
+def _has_outer_limit(sql: str) -> bool:
+    """True only when the OUTERMOST select carries a LIMIT — an inner
+    subquery's LIMIT must not suppress the row cap on the final result."""
+    try:
+        tree = sqlglot.parse_one(sql, read="sqlite")
+        return tree.args.get("limit") is not None
+    except Exception:  # noqa: BLE001 — unparseable: fall back to regex
+        return bool(LIMIT_RE.search(sql))
 
 
 def _touches(sql: str, table: str) -> bool:
@@ -453,8 +474,8 @@ def _apply_role_policy(sql: str, session: dict) -> tuple[str, list[str]]:
                 f"scoped to {scope_desc} ({session['role']}) — "
                 f"{injected} CaseMaster reference(s) constrained")
 
-    # --- Enforce LIMIT ---
-    if not LIMIT_RE.search(sql):
+    # --- Enforce LIMIT (outermost SELECT only — inner LIMITs don't count) ---
+    if not _has_outer_limit(sql):
         sql = f"{sql.rstrip()} LIMIT {policy['row_limit']}"
         notes.append(f"appended LIMIT {policy['row_limit']}")
 
@@ -686,25 +707,20 @@ def get_hotspots(request: Request, level: str = "district",
     if level not in ("district", "station"):
         raise HTTPException(400, "level must be 'district' or 'station'")
     capp = catalyst.app_from_request(request)
-    cache_key = f"hotspots:{level}"
+    # Scope is applied INSIDE the query (not post-filtered from a shared
+    # global cache) so an IO's map reflects their own cases. The cache key
+    # carries the scope so roles never read each other's slices; the
+    # unscoped key stays "hotspots:<level>" and is what Cron pre-warms.
+    scope = _session_scope(session)
+    suffix = "" if not scope else ":" + ",".join(
+        f"{k}={v}" for k, v in sorted(scope.items()))
+    cache_key = f"hotspots:{level}{suffix}"
     data = catalyst.cache_get(cache_key, capp=capp)
     if data is None:
-        # Station level fetches every unit so role filters (an SHO's own
-        # station) still find their row; the UI shows the top slice.
         data = analytics.hotspots(
-            level=level, limit=15 if level == "district" else 200)
+            level=level, limit=15 if level == "district" else 200,
+            scope=scope)
         catalyst.cache_set(cache_key, data, ttl_seconds=3600, capp=capp)
-
-    policy = ROLE_POLICY[session["role"]]
-    if policy["scope"] == "district" or policy["scope"] == "self":
-        data = [r for r in data
-                if r["district_id"] == session.get("district_id")]
-    elif policy["scope"] == "unit":
-        if level == "station":
-            data = [r for r in data if r["unit_id"] == session.get("unit_id")]
-        else:
-            data = [r for r in data
-                    if r["district_id"] == session.get("district_id")]
     _audit(session, "hotspots", level, "", f"{len(data)} rows", capp=capp)
     return {"level": level, "hotspots": data}
 
@@ -764,6 +780,133 @@ def get_predict(request: Request,
            f"{len(data['warnings'])} warnings, {dispatched} alerts",
            capp=capp)
     return data
+
+
+@app.get("/patrol")
+def get_patrol(request: Request,
+               session: dict = Depends(current_session)) -> dict:
+    """Patrol recommendations: station × 4-hour window concentration —
+    the actionable half of prediction (changes a duty roster)."""
+    data = analytics.patrol_windows(scope=_session_scope(session))
+    _audit(session, "patrol", "", "",
+           f"{len(data['recommendations'])} windows",
+           capp=catalyst.app_from_request(request))
+    return data
+
+
+class FeedbackBody(BaseModel):
+    target: str = Field(min_length=1, max_length=200)   # e.g. "warning:Ballari|Cyber Crimes"
+    useful: bool
+    note: str | None = Field(default=None, max_length=500)
+
+
+@app.post("/feedback")
+def post_feedback(body: FeedbackBody, request: Request,
+                  session: dict = Depends(current_session)) -> dict:
+    """Officer feedback on AI outputs (warnings, forecasts). Lands in the
+    audit trail — cheap now, becomes labeled training data later."""
+    _audit(session, "feedback", body.target, "",
+           f"{'useful' if body.useful else 'not-useful'}"
+           + (f" — {body.note}" if body.note else ""),
+           capp=catalyst.app_from_request(request))
+    return {"ok": True}
+
+
+def _weekly_report_html(s: dict) -> str:
+    import html as _html
+    e = _html.escape
+    delta = ("n/a" if s["change_pct"] is None
+             else f"{s['change_pct']:+.1f}% vs prior week")
+    rows = lambda items, k1, k2: "".join(  # noqa: E731
+        f"<tr><td>{e(str(r[k1]))}</td><td>{r[k2]}</td></tr>" for r in items)
+    warn_rows = "".join(
+        f"<tr><td>{e(w['district'])}</td><td>{e(w['category'])}</td>"
+        f"<td>{e(w['severity'])}</td><td>{e(w['message'])}</td></tr>"
+        for w in s["warnings"]) or "<tr><td colspan='4'>none</td></tr>"
+    patrol_rows = "".join(
+        f"<tr><td>{e(p['station'])}</td><td>{e(p['window'])}</td>"
+        f"<td>{p['crimes']}</td><td>{p['heinous']}</td></tr>"
+        for p in s["patrol_recommendations"]) or (
+        "<tr><td colspan='4'>none</td></tr>")
+    return f"""<!doctype html><html><head><meta charset='utf-8'>
+<style>{_PDF_CSS}
+table {{ border-collapse: collapse; width: 100%; margin-bottom: 16px; }}
+th, td {{ border: 1px solid #ccc; padding: 4px 8px; text-align: left; }}
+th {{ background: #f0f0f0; }}
+h2 {{ font-size: 14px; margin: 18px 0 6px; }}
+.kn {{ color: #555; font-size: 11px; }}
+</style></head><body>
+<h1>Weekly Crime Summary — {e(s['district'])}</h1>
+<div class='kn'>ಸಾಪ್ತಾಹಿಕ ಅಪರಾಧ ಸಾರಾಂಶ — ವಾರ {e(s['window'][0])} ರಿಂದ {e(s['window'][1])}</div>
+<div class='meta'>Window: {e(s['window'][0])} → {e(s['window'][1])} ·
+FIRs: <b>{s['fir_count']}</b> ({e(delta)})</div>
+<h2>Top categories · ಪ್ರಮುಖ ವರ್ಗಗಳು</h2>
+<table><tr><th>Category</th><th>FIRs</th></tr>
+{rows(s['top_categories'], 'category', 'n')}</table>
+<h2>Busiest stations · ಹೆಚ್ಚು ಪ್ರಕರಣಗಳ ಠಾಣೆಗಳು</h2>
+<table><tr><th>Station</th><th>FIRs</th></tr>
+{rows(s['top_stations'], 'station', 'n')}</table>
+<h2>Case status · ಪ್ರಕರಣ ಸ್ಥಿತಿ</h2>
+<table><tr><th>Status</th><th>FIRs</th></tr>
+{rows(s['status_breakdown'], 'status', 'n')}</table>
+<h2>Active early warnings · ಸಕ್ರಿಯ ಮುನ್ಸೂಚನೆಗಳು</h2>
+<table><tr><th>District</th><th>Category</th><th>Severity</th><th>Detail</th></tr>
+{warn_rows}</table>
+<h2>Recommended patrol windows · ಶಿಫಾರಸು ಮಾಡಿದ ಗಸ್ತು ಸಮಯಗಳು</h2>
+<table><tr><th>Station</th><th>Window</th><th>Incidents (90d)</th><th>Heinous</th></tr>
+{patrol_rows}</table>
+<div class='meta'>Generated {_now_iso()} · KSP Crime AI · every number
+traceable via the audit log</div>
+</body></html>"""
+
+
+@app.post("/report/weekly")
+def report_weekly(request: Request, district: str | None = None,
+                  session: dict = Depends(current_session)):
+    """One-click SP's Monday-morning brief: 7-day summary, warnings, and
+    patrol windows as a PDF (SmartBrowz) or self-contained HTML fallback.
+    admin picks any district (or statewide); dysp gets their own district;
+    other roles 403."""
+    capp = catalyst.app_from_request(request)
+    role = session["role"]
+    district_id = None
+    if role == "dysp":
+        district_id = session["district_id"]
+    elif role == "admin":
+        if district:
+            with cursor() as conn:
+                r = conn.execute(
+                    "SELECT DistrictID FROM District WHERE DistrictName = ?",
+                    (district,)).fetchone()
+            if not r:
+                raise HTTPException(400, f"unknown district {district!r}")
+            district_id = r["DistrictID"]
+    else:
+        raise HTTPException(403, "weekly report is for admin / dysp roles")
+
+    summary = analytics.weekly_summary(district_id=district_id)
+    html_doc = _weekly_report_html(summary)
+    slug = summary["district"].replace(" ", "-").lower()
+
+    pdf = catalyst.smartbrowz_pdf(html_doc, capp=capp)
+    if pdf is not None:
+        catalyst.stratus_put(
+            f"reports/weekly-{slug}-{_now_iso().replace(':', '')}.pdf",
+            pdf, content_type="application/pdf", capp=capp)
+        _audit(session, "weekly_report", summary["district"], "",
+               f"pdf {len(pdf)} bytes", capp=capp)
+        return Response(
+            content=pdf, media_type="application/pdf",
+            headers={"Content-Disposition":
+                     f"attachment; filename=weekly-{slug}.pdf"})
+
+    # Honest fallback: self-contained HTML (print-to-PDF in any browser).
+    _audit(session, "weekly_report", summary["district"], "",
+           "html fallback (no SmartBrowz context)", capp=capp)
+    return Response(
+        content=html_doc, media_type="text/html",
+        headers={"Content-Disposition":
+                 f"attachment; filename=weekly-{slug}.html"})
 
 
 @app.get("/chargesheet-rate")
@@ -836,7 +979,8 @@ def get_repeat_offenders(
 # Audit endpoints
 # ============================================================
 @app.get("/audit")
-def get_audit(session: dict = Depends(current_session)) -> dict:
+def get_audit(request: Request,
+              session: dict = Depends(current_session)) -> dict:
     if not ROLE_POLICY[session["role"]]["audit_visible"]:
         raise HTTPException(403, "admin only")
     with cursor() as conn:
@@ -845,11 +989,14 @@ def get_audit(session: dict = Depends(current_session)) -> dict:
             "result_summary, timestamp FROM audit_log "
             "ORDER BY id DESC LIMIT 200"
         ).fetchall()
+    # Watch the watchers: reading the audit log is itself audited.
+    _audit(session, "audit_view", "", "", f"{len(rows)} entries",
+           capp=catalyst.app_from_request(request))
     return {"entries": [dict(r) for r in rows]}
 
 
 @app.get("/audit/fir/{crime_no}")
-def get_audit_for_fir(crime_no: str,
+def get_audit_for_fir(crime_no: str, request: Request,
                       session: dict = Depends(current_session)) -> dict:
     """Reverse lookup: which queries have touched this FIR? (supervision)"""
     if not ROLE_POLICY[session["role"]]["audit_visible"]:
@@ -859,10 +1006,13 @@ def get_audit_for_fir(crime_no: str,
         rows = conn.execute(
             "SELECT id, user_id, role, action, query, sql, "
             "result_summary, timestamp FROM audit_log "
-            "WHERE query LIKE ? OR sql LIKE ? OR result_summary LIKE ? "
+            "WHERE (query LIKE ? OR sql LIKE ? OR result_summary LIKE ?) "
+            "AND action NOT IN ('audit_view', 'audit_fir_view') "
             "ORDER BY id DESC LIMIT 100",
             (like, like, like),
         ).fetchall()
+    _audit(session, "audit_fir_view", crime_no, "", f"{len(rows)} entries",
+           capp=catalyst.app_from_request(request))
     return {"crime_no": crime_no, "entries": [dict(r) for r in rows]}
 
 
@@ -893,7 +1043,16 @@ class TTSBody(BaseModel):
 
 @app.post("/voice/tts")
 def voice_tts(body: TTSBody) -> Response:
+    """Server TTS chain: Zia URL (env-gated) → Sarvam (kn-IN specialist,
+    free key) → Google Cloud TTS → OpenAI TTS → JSON telling the client to
+    use browser speechSynthesis. Kannada needs a server path — no browser
+    or Windows voice exists for kn-IN."""
     audio = catalyst.zia_tts(body.text, lang=body.lang)
+    mime = "audio/mpeg"
+    if audio is None:
+        out = llm.tts(body.text, lang=body.lang)
+        if out:
+            audio, mime = out
     if audio is None:
         return JSONResponse(
             status_code=200,
@@ -901,7 +1060,7 @@ def voice_tts(body: TTSBody) -> Response:
                      "reason": "server TTS not configured — "
                                "use browser speechSynthesis"},
         )
-    return Response(content=audio, media_type="audio/mpeg")
+    return Response(content=audio, media_type=mime)
 
 
 # ============================================================
@@ -1186,6 +1345,32 @@ def get_case(crime_no: str, request: Request,
     return resp
 
 
+@app.get("/case/{crime_no}/linked")
+def get_case_linked(crime_no: str, request: Request,
+                    session: dict = Depends(current_session)) -> dict:
+    """Case linkage — related FIRs ranked by shared-evidence signals
+    (shared persons via PersonAlias, act/section overlap, same modus,
+    spatio-temporal proximity). Every suggestion carries its reasons."""
+    capp = catalyst.app_from_request(request)
+    with cursor() as conn:
+        case = conn.execute(
+            "SELECT CaseMasterID, PoliceStationID, PolicePersonID "
+            "FROM CaseMaster WHERE CrimeNo = ?", (crime_no,),
+        ).fetchone()
+    if not case:
+        raise HTTPException(404, "not found")
+    if not _case_in_scope(session, case["PoliceStationID"],
+                          case["PolicePersonID"], case["CaseMasterID"]):
+        _audit(session, "case_linkage", crime_no, "",
+               "forbidden: out of scope", capp=capp)
+        raise HTTPException(403, "case is outside your assigned scope")
+    data = analytics.linked_cases(
+        crime_no=crime_no, scope=_session_scope(session))
+    _audit(session, "case_linkage", crime_no, "",
+           f"{len(data['linked'])} linked cases", capp=capp)
+    return data
+
+
 # ============================================================
 # Health
 # ============================================================
@@ -1195,10 +1380,14 @@ def health(request: Request) -> dict:
         n = conn.execute(
             "SELECT COUNT(*) AS n FROM CaseMaster"
         ).fetchone()["n"]
+    services = catalyst.service_status(request)
+    # Which hosted LLMs are configured (ids only — never keys). The chain
+    # rotates through these on 429/quota before the keyword fallback.
+    services["llm_providers"] = llm.configured_providers()
     return {
         "ok": True,
         "cases": n,
-        "services": catalyst.service_status(request),
+        "services": services,
     }
 
 

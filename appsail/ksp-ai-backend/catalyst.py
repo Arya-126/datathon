@@ -438,17 +438,19 @@ def smartbrowz_pdf(html: str, capp=None) -> bytes | None:
 # Push Notifications — spike alerts to on-duty officers
 # ============================================================
 def push_notify(user_id: str, title: str, body: str,
-                data: dict | None = None, capp=None) -> bool:
-    """Web push via Catalyst Push Notifications when live; recipients are
-    Catalyst-authenticated user emails (CATALYST_ALERT_RECIPIENTS env or the
-    session user's email). Local fallback logs to stdout."""
+                data: dict | None = None, capp=None,
+                recipients: list[str] | None = None) -> bool:
+    """Web push via Catalyst Push Notifications when live. Recipients:
+    explicit `recipients` arg (jurisdiction routing) > CATALYST_ALERT_RECIPIENTS
+    env > the session user's email. Local fallback logs to stdout."""
     message = f"{title} — {body}"
     if capp is not None:
-        recipients = [
-            r.strip() for r in
-            os.environ.get("CATALYST_ALERT_RECIPIENTS", "").split(",")
-            if r.strip()
-        ]
+        if recipients is None:
+            recipients = [
+                r.strip() for r in
+                os.environ.get("CATALYST_ALERT_RECIPIENTS", "").split(",")
+                if r.strip()
+            ]
         if not recipients and "@" in (user_id or ""):
             recipients = [user_id]
         if recipients:
@@ -514,5 +516,6 @@ def service_status(request=None) -> dict:
         "push": catalyst_ctx,
         "gemini": bool(
             os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GEMINI_API_KEYS")
             or os.environ.get("GOOGLE_API_KEY")),
     }

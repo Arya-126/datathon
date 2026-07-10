@@ -1,10 +1,15 @@
-"""NL→SQL over the FIR schema — provider chain:
+"""NL→SQL over the FIR schema — rotating provider chain:
 
   1. Catalyst QuickML (LLM serving) — primary once an endpoint is deployed
      (set CATALYST_QUICKML_ENDPOINT_KEY; requires a Catalyst request context).
-  2. Google Gemini Flash — fallback; in production the credential is managed
-     as a Catalyst Connection, surfaced to the app as GEMINI_API_KEY.
-     Called over HTTP so no extra SDK dependency is required.
+  2. Hosted LLMs, tried in order, each key skipped while on cooldown after a
+     429/quota error so the next key/provider takes over automatically:
+       - Google Gemini      GEMINI_API_KEY / GEMINI_API_KEYS (comma pool)
+       - Groq               GROQ_API_KEY   (OpenAI-compatible)
+       - OpenRouter         OPENROUTER_API_KEY (OpenAI-compatible)
+       - OpenAI             OPENAI_API_KEY
+       - Anthropic          ANTHROPIC_API_KEY (raw HTTP, no SDK)
+     All called over plain HTTP — no per-provider SDK dependencies.
   3. Local keyword rules — deterministic offline demo (fully bilingual).
 """
 from __future__ import annotations
@@ -12,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 
 import requests
@@ -19,26 +25,77 @@ import requests
 import catalyst
 from db import LLM_SCHEMA_DOC
 
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+LLM_TIMEOUT = float(os.environ.get("LLM_TIMEOUT",
+                                   os.environ.get("GEMINI_TIMEOUT", "30")))
 GEMINI_ENDPOINT = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     "{model}:generateContent"
 )
-GEMINI_TIMEOUT = float(os.environ.get("GEMINI_TIMEOUT", "30"))
 
-# API key must never appear in error messages/logs shown to the frontend.
-# HTTP errors from requests include the full request URL by default, and the
-# URL contains ?key=<GEMINI_API_KEY>.
+# provider id -> unix timestamp until which it is skipped (quota cooldown)
+_COOLDOWN: dict[str, float] = {}
+
+# API keys must never appear in error messages/logs shown to the frontend.
 _KEY_URL_RE = re.compile(r"[?&]key=[^&\s]+")
 
 
+def _providers() -> list[dict]:
+    """Build the hosted-LLM chain from env. Re-read per call so keys added
+    to the AppSail env after boot are picked up without a restart."""
+    out: list[dict] = []
+    pool: list[str] = []
+    if os.environ.get("GEMINI_API_KEY"):
+        pool.append(os.environ["GEMINI_API_KEY"].strip())
+    pool += [k.strip() for k in
+             os.environ.get("GEMINI_API_KEYS", "").split(",") if k.strip()]
+    seen: set[str] = set()
+    gemini_model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+    n = 0
+    for key in pool:
+        if key in seen:
+            continue
+        seen.add(key)
+        n += 1
+        out.append({"id": "gemini" if n == 1 else f"gemini#{n}",
+                    "kind": "gemini", "key": key, "model": gemini_model})
+    if os.environ.get("GROQ_API_KEY"):
+        out.append({"id": "groq", "kind": "openai",
+                    "key": os.environ["GROQ_API_KEY"].strip(),
+                    "model": os.environ.get("GROQ_MODEL",
+                                            "llama-3.3-70b-versatile"),
+                    "base": "https://api.groq.com/openai/v1"})
+    if os.environ.get("OPENROUTER_API_KEY"):
+        out.append({"id": "openrouter", "kind": "openai",
+                    "key": os.environ["OPENROUTER_API_KEY"].strip(),
+                    "model": os.environ.get(
+                        "OPENROUTER_MODEL",
+                        "meta-llama/llama-3.3-70b-instruct:free"),
+                    "base": "https://openrouter.ai/api/v1"})
+    if os.environ.get("OPENAI_API_KEY"):
+        out.append({"id": "openai", "kind": "openai",
+                    "key": os.environ["OPENAI_API_KEY"].strip(),
+                    "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+                    "base": "https://api.openai.com/v1"})
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        out.append({"id": "anthropic", "kind": "anthropic",
+                    "key": os.environ["ANTHROPIC_API_KEY"].strip(),
+                    "model": os.environ.get("ANTHROPIC_MODEL",
+                                            "claude-haiku-4-5-20251001")})
+    return out
+
+
+def configured_providers() -> list[str]:
+    """Provider ids with a key present — surfaced on /health."""
+    return [p["id"] for p in _providers()]
+
+
 def _sanitize_error(msg: str) -> str:
-    """Strip any ?key=… query params (and standalone key strings) so a raw
-    exception string is safe to echo to the user."""
+    """Strip ?key=… query params and every configured key string so a raw
+    exception is safe to echo to the user."""
     msg = _KEY_URL_RE.sub("?key=REDACTED", msg)
-    key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if key and len(key) > 6:
-        msg = msg.replace(key, "REDACTED")
+    for p in _providers():
+        if len(p["key"]) > 6:
+            msg = msg.replace(p["key"], "REDACTED")
     return msg
 
 FORBIDDEN_SQL = re.compile(
@@ -60,13 +117,24 @@ Rules:
      "language": "en" | "kn",
      "sql": "SELECT ... LIMIT 200",
      "explanation_en": "one plain-English sentence describing what the SQL does",
-     "explanation_kn": "same in Kannada if the question was Kannada, else empty string",
+     "explanation_kn": "the same sentence in Kannada — ALWAYS provide this, regardless of the question's language",
      "chart_hint": "table" | "bar" | "line" | "map" | "network",
      "answer_prefix_en": "one-sentence natural-language lead-in for the result",
-     "answer_prefix_kn": "same in Kannada if the question was Kannada, else empty string"
+     "answer_prefix_kn": "the same lead-in in Kannada — ALWAYS provide this, regardless of the question's language"
    }}
 2. SQL MUST be a single SELECT (no INSERT/UPDATE/DELETE/DDL, no ';').
 3. Always add LIMIT 200 unless the question is an aggregate.
+3b. District.DistrictName values are EXACTLY these 15 — always map
+    colloquial/anglicized names to them before filtering:
+      Bengaluru Urban, Bengaluru Rural, Mysuru, Mangaluru,
+      Hubballi-Dharwad, Belagavi, Kalaburagi, Ballari, Vijayapura,
+      Shivamogga, Tumakuru, Davanagere, Udupi, Chitradurga, Raichur
+    Mappings: Bangalore/Bengaluru → 'Bengaluru Urban' (add 'Bengaluru
+    Rural' too if the user means the metro region); Mysore → Mysuru;
+    Mangalore → Mangaluru; Hubli/Dharwad → Hubballi-Dharwad;
+    Gulbarga → Kalaburagi; Bellary → Ballari; Bijapur → Vijayapura;
+    Shimoga → Shivamogga; Tumkur → Tumakuru; Belgaum → Belagavi.
+    Never emit a district literal outside this list.
 4. Never SELECT columns from ComplainantDetails, Victim, or Accused unless
    the query is an aggregate (COUNT/GROUP BY). Row-level projections of
    caste_master_name / ReligionName / OccupationName are forbidden — those
@@ -123,13 +191,8 @@ def is_safe_sql(sql: str) -> tuple[bool, str]:
     return True, ""
 
 
-def _gemini_key() -> str | None:
-    return os.environ.get("GEMINI_API_KEY") or os.environ.get(
-        "GOOGLE_API_KEY") or None
-
-
 def _to_gemini_contents(messages: list[dict]) -> list[dict]:
-    """Convert Anthropic-style messages (role: user|assistant) to Gemini's
+    """Convert chat-style messages (role: user|assistant) to Gemini's
     contents shape (role: user|model, parts: [{text}])."""
     out: list[dict] = []
     for m in messages:
@@ -138,14 +201,8 @@ def _to_gemini_contents(messages: list[dict]) -> list[dict]:
     return out
 
 
-def _gemini_generate(system_prompt: str, messages: list[dict]) -> str:
-    """POST to the Gemini generateContent endpoint; return the model text.
-    Raises on any transport / HTTP / shape error so the caller can fall
-    through to the offline keyword rules."""
-    key = _gemini_key()
-    if not key:
-        raise RuntimeError("GEMINI_API_KEY not set")
-    url = GEMINI_ENDPOINT.format(model=MODEL)
+def _call_gemini(p: dict, system_prompt: str, messages: list[dict]) -> str:
+    url = GEMINI_ENDPOINT.format(model=p["model"])
     body = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": _to_gemini_contents(messages),
@@ -155,20 +212,146 @@ def _gemini_generate(system_prompt: str, messages: list[dict]) -> str:
             "maxOutputTokens": 1024,
         },
     }
-    # Pass the key as a header, not a query param, so it never lands in
-    # request.url / requests' HTTPError messages / server access logs.
-    r = requests.post(url, headers={"x-goog-api-key": key}, json=body,
-                      timeout=GEMINI_TIMEOUT)
+    # Key as header, not query param — never lands in request.url /
+    # HTTPError messages / server access logs.
+    r = requests.post(url, headers={"x-goog-api-key": p["key"]}, json=body,
+                      timeout=LLM_TIMEOUT)
     r.raise_for_status()
     data = r.json()
     candidates = data.get("candidates") or []
     if not candidates:
-        raise ValueError(f"gemini returned no candidates: {data}")
+        raise ValueError(f"no candidates: {data}")
     parts = candidates[0].get("content", {}).get("parts") or []
-    text = "".join(p.get("text", "") for p in parts).strip()
+    text = "".join(part.get("text", "") for part in parts).strip()
     if not text:
-        raise ValueError("gemini returned empty text")
+        raise ValueError("empty text")
     return text
+
+
+def _call_openai(p: dict, system_prompt: str, messages: list[dict]) -> str:
+    """OpenAI-compatible chat completions — covers Groq, OpenRouter, OpenAI."""
+    r = requests.post(
+        f"{p['base']}/chat/completions",
+        headers={"Authorization": f"Bearer {p['key']}"},
+        json={
+            "model": p["model"],
+            "messages": [{"role": "system", "content": system_prompt},
+                         *messages],
+            "temperature": 0.2,
+            "max_tokens": 1024,
+        },
+        timeout=LLM_TIMEOUT,
+    )
+    r.raise_for_status()
+    text = (r.json()["choices"][0]["message"]["content"] or "").strip()
+    if not text:
+        raise ValueError("empty text")
+    return text
+
+
+def _call_anthropic(p: dict, system_prompt: str, messages: list[dict]) -> str:
+    r = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={"x-api-key": p["key"], "anthropic-version": "2023-06-01"},
+        json={"model": p["model"], "max_tokens": 1024,
+              "system": system_prompt, "messages": messages},
+        timeout=LLM_TIMEOUT,
+    )
+    r.raise_for_status()
+    text = "".join(b.get("text", "")
+                   for b in r.json().get("content", [])).strip()
+    if not text:
+        raise ValueError("empty text")
+    return text
+
+
+_CALLERS = {"gemini": _call_gemini, "openai": _call_openai,
+            "anthropic": _call_anthropic}
+
+
+def _sarvam_tts(text: str, lang: str) -> tuple[bytes, str] | None:
+    """Sarvam AI TTS (bulbul) — Indian-language specialist with first-class
+    kn-IN. Free API key with starter credits, no card:
+    dashboard.sarvam.ai → API Keys → SARVAM_API_KEY. Returns WAV."""
+    key = os.environ.get("SARVAM_API_KEY")
+    if not key:
+        return None
+    try:
+        r = requests.post(
+            "https://api.sarvam.ai/text-to-speech",
+            headers={"api-subscription-key": key},
+            json={"inputs": [text[:500]],
+                  "target_language_code": lang if lang.endswith("-IN")
+                  else "en-IN",
+                  "speaker": os.environ.get("SARVAM_TTS_SPEAKER", "anushka"),
+                  "model": os.environ.get("SARVAM_TTS_MODEL", "bulbul:v2")},
+            timeout=LLM_TIMEOUT,
+        )
+        r.raise_for_status()
+        audios = r.json().get("audios") or []
+        if not audios:
+            return None
+        import base64
+        return base64.b64decode(audios[0]), "audio/wav"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _google_tts(text: str, lang: str) -> bytes | None:
+    """Google Cloud Text-to-Speech — the only mainstream API with real
+    kn-IN voices (browsers/Windows ship none). Free tier: 1M chars/month.
+    Key: console.cloud.google.com → enable 'Cloud Text-to-Speech API' →
+    Credentials → API key → GOOGLE_TTS_API_KEY."""
+    key = os.environ.get("GOOGLE_TTS_API_KEY")
+    if not key:
+        return None
+    try:
+        r = requests.post(
+            "https://texttospeech.googleapis.com/v1/text:synthesize",
+            headers={"X-Goog-Api-Key": key},
+            json={"input": {"text": text[:500]},
+                  "voice": {"languageCode": lang},
+                  "audioConfig": {"audioEncoding": "MP3"}},
+            timeout=LLM_TIMEOUT,
+        )
+        r.raise_for_status()
+        b64 = r.json().get("audioContent")
+        return __import__("base64").b64decode(b64) if b64 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _openai_tts(text: str) -> bytes | None:
+    key = os.environ.get("OPENAI_API_KEY")
+    if not key:
+        return None
+    try:
+        r = requests.post(
+            "https://api.openai.com/v1/audio/speech",
+            headers={"Authorization": f"Bearer {key}"},
+            json={"model": os.environ.get("OPENAI_TTS_MODEL",
+                                          "gpt-4o-mini-tts"),
+                  "voice": os.environ.get("OPENAI_TTS_VOICE", "alloy"),
+                  "input": text[:500], "response_format": "mp3"},
+            timeout=LLM_TIMEOUT,
+        )
+        r.raise_for_status()
+        return r.content
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def tts(text: str, lang: str = "en-IN") -> tuple[bytes, str] | None:
+    """Server-side TTS chain: Sarvam (Indian languages, free key, no card)
+    → Google Cloud TTS (needs billing account) → OpenAI TTS (needs paid
+    quota). Returns (audio bytes, mime type) or None."""
+    if not text:
+        return None
+    out = _sarvam_tts(text, lang)
+    if out:
+        return out
+    audio = _google_tts(text, lang) or _openai_tts(text)
+    return (audio, "audio/mpeg") if audio else None
 
 
 def _extract_json(text: str) -> dict:
@@ -203,6 +386,27 @@ def _fallback(query: str) -> LLMResult:
     """
     q = query.lower()
     is_kn = any("ಀ" <= c <= "೿" for c in query)
+
+    # Greeting / no-content guard: don't answer "hi" with Recent FIRs.
+    words = re.findall(r"[\wಀ-೿]+", q)
+    greetings = {"hi", "hello", "hey", "hai", "namaste", "ok", "okay",
+                 "thanks", "thank", "you", "yo", "test", "ನಮಸ್ಕಾರ", "ಹಲೋ",
+                 "ಧನ್ಯವಾದ"}
+    if not words or (len(words) <= 2 and all(w in greetings for w in words)):
+        return LLMResult(
+            language="kn" if is_kn else "en", sql="",
+            explanation_en=("No crime-data question detected — ask about "
+                            "districts, trends, networks, sections, or a "
+                            "specific FIR."),
+            explanation_kn=("ಅಪರಾಧ-ದತ್ತಾಂಶ ಪ್ರಶ್ನೆ ಪತ್ತೆಯಾಗಿಲ್ಲ — ಜಿಲ್ಲೆಗಳು, "
+                            "ಟ್ರೆಂಡ್‌ಗಳು, ಜಾಲಗಳು ಅಥವಾ ನಿರ್ದಿಷ್ಟ ಎಫ್‌ಐಆರ್ ಬಗ್ಗೆ ಕೇಳಿ."),
+            answer_prefix_en=("Namaste! Ask me about Karnataka crime data — "
+                              "e.g. 'Which districts had the most cyber "
+                              "crime?'"),
+            answer_prefix_kn=("ನಮಸ್ಕಾರ! ಕರ್ನಾಟಕ ಅಪರಾಧ ದತ್ತಾಂಶದ ಬಗ್ಗೆ ಕೇಳಿ — "
+                              "ಉದಾ. 'ಯಾವ ಜಿಲ್ಲೆಗಳಲ್ಲಿ ಹೆಚ್ಚು ಸೈಬರ್ ಅಪರಾಧ?'"),
+            used_fallback=True,
+        )
 
     if any(k in q for k in (
         "hotspot", "top district", "most crime", "highest", "which district",
@@ -478,7 +682,13 @@ def _fallback(query: str) -> LLMResult:
 # ---------------------------------------------------------------- entry point
 def nl_to_sql(query: str, history: list[ChatTurn] | None = None,
               capp=None) -> LLMResult:
-    """NL question → validated SQL. Chain: QuickML → Gemini → fallback."""
+    """NL question → validated SQL.
+
+    Chain: QuickML → hosted providers in _providers() order → keyword
+    fallback. A provider that errors goes on cooldown (long for auth
+    failures, short for rate limits) so the next key/provider is tried
+    immediately and quota exhaustion degrades seamlessly.
+    """
     messages = _messages_from_history(query, history)
 
     # 1. Catalyst QuickML (LLM serving)
@@ -490,29 +700,38 @@ def nl_to_sql(query: str, history: list[ChatTurn] | None = None,
     except Exception:  # noqa: BLE001
         pass  # unconfigured or errored — fall through
 
-    # 2. Google Gemini Flash (Catalyst Connection-managed credential in prod)
-    if _gemini_key():
+    # 2. Hosted providers, skipping any on cooldown
+    errors: list[str] = []
+    now = time.time()
+    for p in _providers():
+        if _COOLDOWN.get(p["id"], 0) > now:
+            continue
         try:
-            text = _gemini_generate(SYSTEM_PROMPT, messages)
+            text = _CALLERS[p["kind"]](p, SYSTEM_PROMPT, messages)
             data = _extract_json(text)
             r = _result_from_json(data)
             r.raw = text
-            r.provider = "gemini"
+            r.provider = p["id"]
             return r
         except Exception as e:  # noqa: BLE001
-            fb = _fallback(query)
-            safe_msg = _sanitize_error(str(e))
-            # Give the frontend a hint about *why* we fell back, without
-            # leaking the URL/key. 429 == rate limit; other codes are keyed
-            # under "gemini error" so the user can look them up.
-            reason = "rate-limited" if "429" in safe_msg else "error"
-            fb.explanation_en = (
-                f"Gemini {reason}; used keyword fallback. Details: {safe_msg}"
-            )
-            return fb
+            errors.append(f"{p['id']}: {_sanitize_error(str(e))}")
+            code = getattr(getattr(e, "response", None), "status_code", None)
+            if code == 429:          # rate limit / quota — brief cooldown
+                cooldown = 120
+            elif code in (401, 403):  # bad/revoked key — long cooldown
+                cooldown = 3600
+            else:                     # transient / parse error
+                cooldown = 30
+            _COOLDOWN[p["id"]] = now + cooldown
 
     # 3. Fallback
-    return _fallback(query)
+    fb = _fallback(query)
+    if errors:
+        fb.explanation_en = (
+            "All LLM providers unavailable; used keyword fallback. "
+            + " | ".join(errors[:3])
+        )
+    return fb
 
 
 def _messages_from_history(query: str,

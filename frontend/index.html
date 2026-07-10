@@ -69,6 +69,8 @@ tailwind.config = {
       <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Investigating Officer</label>
       <select id="loginEmployee" class="w-full mb-4 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 outline-none"></select>
     </div>
+    <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Demo Password <span class="normal-case text-slate-500">(only if configured)</span></label>
+    <input id="loginPassword" type="password" class="w-full mb-4 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 focus:border-accent outline-none" placeholder="leave blank if none" />
     <button id="loginBtn" class="w-full mt-2 bg-accent hover:bg-blue-500 text-white font-medium py-2.5 rounded-lg transition">Enter</button>
     <p class="text-[11px] text-slate-500 mt-4 leading-relaxed">
       Role-based access is enforced in the query layer. Every action is written to an audit trail. Analyst sessions cannot project PII columns; IO sessions only see their own cases.

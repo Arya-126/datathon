@@ -15,6 +15,7 @@ Deterministic and idempotent — safe to run any number of times.
 from __future__ import annotations
 
 import difflib
+import os
 import re
 from collections import defaultdict
 
@@ -148,9 +149,57 @@ def warm_caches(capp=None) -> dict:
     return warmed
 
 
+def _alert_routes() -> dict[str, list[str]]:
+    """Parse CATALYST_ALERT_ROUTES: 'District=a@x.com,b@x.com;District2=c@x.com'.
+    An alert nobody owns is an alert nobody acts on — spikes route to the
+    district's own DySP, with CATALYST_ALERT_RECIPIENTS as the default."""
+    routes: dict[str, list[str]] = {}
+    for pair in os.environ.get("CATALYST_ALERT_ROUTES", "").split(";"):
+        if "=" not in pair:
+            continue
+        district, emails = pair.split("=", 1)
+        recipients = [e.strip() for e in emails.split(",") if e.strip()]
+        if district.strip() and recipients:
+            routes[district.strip().lower()] = recipients
+    return routes
+
+
+def dispatch_alerts(capp=None) -> dict:
+    """Proactive early-warning loop — evaluate spikes and PUSH alerts.
+
+    This is what makes prevention proactive rather than pull-based: the
+    nightly Cron run evaluates the 30-day deltas and pushes each spike to
+    the affected district's own recipients (CATALYST_ALERT_ROUTES), falling
+    back to the global CATALYST_ALERT_RECIPIENTS list. No dashboard visit
+    needed. (GET /predict additionally dispatches on-demand for the viewer.)
+    """
+    routes = _alert_routes()
+    data = analytics.predict(scope=None)
+    pushed = routed = 0
+    for w in data["warnings"]:
+        if w.get("severity") == "spike":
+            recipients = routes.get(w["district"].lower())
+            if recipients:
+                routed += 1
+            if catalyst.push_notify(
+                user_id="",
+                title=f"Crime spike: {w['category']} in {w['district']}",
+                body=w["message"],
+                data={"district": w["district"], "category": w["category"],
+                      "severity": w["severity"], "source": "cron"},
+                capp=capp,
+                recipients=recipients,  # None → global default list
+            ):
+                pushed += 1
+    return {"warnings_evaluated": len(data["warnings"]),
+            "spike_alerts_pushed": pushed,
+            "district_routed": routed}
+
+
 def refresh(capp=None) -> dict:
     """Full nightly refresh — the Catalyst Cron entrypoint."""
     return {
         "person_alias": rebuild_person_alias(),
         "caches": warm_caches(capp=capp),
+        "alerts": dispatch_alerts(capp=capp),
     }

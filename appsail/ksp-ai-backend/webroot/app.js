@@ -59,6 +59,19 @@ function tCol(name) {
   if (state.lang !== 'kn') return name;
   return COLUMN_KN[String(name).toLowerCase()] || name;
 }
+
+// Human label for an LLM provider id ("gemini#2" → "Gemini Flash #2").
+const PROVIDER_NAMES = {
+  quickml: 'Catalyst QuickML', gemini: 'Gemini Flash', groq: 'Groq',
+  openrouter: 'OpenRouter', openai: 'OpenAI', anthropic: 'Claude',
+  fallback: 'keyword fallback (offline)',
+};
+function providerLabel(id) {
+  if (!id) return '—';
+  const [base, n] = String(id).split('#');
+  const name = PROVIDER_NAMES[base] || base;
+  return n ? `${name} #${n}` : name;
+}
 function tVal(v) {
   if (state.lang !== 'kn' || v == null) return v;
   return VALUE_KN[String(v)] || v;
@@ -195,6 +208,14 @@ function applyI18n() {
     if (titleEl) titleEl.textContent = tt;
     if (subEl) subEl.textContent = ts;
   }
+  // Retranslate already-rendered result tables (chat log, audit, insights)
+  // from the original English stored in data-key / data-raw.
+  document.querySelectorAll('table.data th[data-key]').forEach((th) => {
+    th.textContent = tCol(th.dataset.key);
+  });
+  document.querySelectorAll('table.data td[data-raw]').forEach((td) => {
+    td.textContent = tVal(td.dataset.raw);
+  });
   document.documentElement.lang = state.lang === 'kn' ? 'kn' : 'en';
 }
 
@@ -319,6 +340,8 @@ async function initLogin() {
     if (role === 'dysp') body.district = $('#loginDistrict').value;
     if (role === 'sho')  body.unit = $('#loginUnit').value;
     if (role === 'io')   body.employee_id = Number($('#loginEmployee').value);
+    const pw = $('#loginPassword')?.value;
+    if (pw) body.password = pw;
     try {
       const r = await api('/login', { method: 'POST', body: JSON.stringify(body) });
       state.token = r.token;
@@ -399,8 +422,13 @@ async function loadHealth() {
     // Choose the primary LLM label based on service_status.
     let label = 'LLM: fallback';
     let cls = 'bg-amber-900/40 text-amber-300';
+    const providers = h.services?.llm_providers || [];
     if (h.services?.quickml) { label = 'LLM: QuickML'; cls = 'bg-emerald-900/40 text-emerald-300'; }
-    else if (h.services?.gemini) { label = 'LLM: Gemini'; cls = 'bg-emerald-900/40 text-emerald-300'; }
+    else if (providers.length) {
+      label = `LLM: ${providerLabel(providers[0])}` +
+              (providers.length > 1 ? ` +${providers.length - 1}` : '');
+      cls = 'bg-emerald-900/40 text-emerald-300';
+    }
     $('#llmBadge').textContent = label;
     $('#llmBadge').className = 'px-2 py-1 rounded border border-ink-600 text-[11px] tracking-wider ' + cls;
   } catch {}
@@ -431,7 +459,15 @@ function addMessage(role, opts) {
   const bubble = el('div', { class: cls });
 
   if (role === 'bot' && opts.prefix) {
-    bubble.appendChild(el('div', { class: 'prefix' }, opts.prefix));
+    const replay = el('button', {
+      class: 'ml-2 px-1.5 py-0.5 rounded bg-ink-700 border border-ink-600 '
+           + 'hover:bg-ink-600 text-xs align-middle shrink-0',
+      title: 'Speak this answer / ಈ ಉತ್ತರವನ್ನು ಓದಿ',
+    }, '🔊');
+    replay.addEventListener('click', () => speak(opts.prefix));
+    bubble.appendChild(el('div',
+      { class: 'prefix flex items-center gap-1' },
+      [el('span', {}, opts.prefix), replay]));
   }
   if (opts.text) {
     bubble.appendChild(el('div', {}, opts.text));
@@ -457,10 +493,13 @@ function addMessage(role, opts) {
 
 function renderTable(columns, rows) {
   const table = el('table', { class: 'data' });
+  // data-key / data-raw hold the original English so applyI18n can
+  // retranslate already-rendered tables when the language flips.
   const thead = el('thead', {}, el('tr', {},
-    columns.map(c => el('th', {}, tCol(c)))));
+    columns.map(c => el('th', { 'data-key': c }, tCol(c)))));
   const tbody = el('tbody', {}, rows.slice(0, 25).map(r =>
-    el('tr', {}, columns.map(c => el('td', {}, String(tVal(r[c]) ?? ''))))
+    el('tr', {}, columns.map(c => el('td', { 'data-raw': String(r[c] ?? '') },
+                                     String(tVal(r[c]) ?? ''))))
   ));
   table.append(thead, tbody);
   if (rows.length > 25) {
@@ -525,9 +564,8 @@ function renderExplain(r, notes) {
   if (notes?.length) {
     div.appendChild(kv(t('explain.roleNotes'), notes.join('; ')));
   }
-  const providerLabel = { quickml: 'Catalyst QuickML', gemini: 'Gemini Flash',
-                          fallback: 'keyword fallback (offline)' };
-  div.appendChild(kv(t('explain.provider'), providerLabel[r.provider] || r.provider));
+  div.appendChild(kv(t('explain.provider'),
+                     providerLabel(r.provider)));
 }
 
 async function sendChat() {
@@ -576,12 +614,8 @@ async function sendChat() {
       rows: r.rows, columns: r.columns,
     });
     renderExplain(r, r.notes);
-    if (r.chart_hint === 'network' && r.rows?.length) {
-      // Prime the network view with the returned pairs.
-      state.pendingNetwork = r.rows;
-    }
-    // Optional voice output
-    speak(prefix, r.language);
+    // Optional voice output — language auto-detected from the prefix text.
+    speak(prefix);
   } catch (e) {
     thinking.remove();
     addMessage('bot', { text: `Error: ${e.message}` });
@@ -662,11 +696,62 @@ function setupVoice() {
   }
 }
 
-function speak(text, lang) {
-  if (!text || !window.speechSynthesis) return;
+// TTS. Language is detected from the TEXT itself (Kannada Unicode block),
+// not from the question's language — so a Kannada answer prefix is always
+// voiced kn-IN even when the question was asked in English. An explicit
+// matching voice is selected because browsers silently substitute the
+// default (English) voice when none matches u.lang — the reason Kannada
+// used to come out as English.
+let _ttsAudio = null;          // currently playing server-TTS clip
+let _serverTtsDead = false;    // remembered 'not configured' so we ask once
+
+// Server TTS (OpenAI via /voice/tts) — the only working Kannada path when
+// neither Windows nor the browser ships a kn-IN voice. Returns true when
+// audio actually played.
+async function speakViaServer(text, lang) {
+  if (_serverTtsDead) return false;
+  try {
+    const res = await fetch(API_BASE + '/voice/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json',
+                 'Authorization': `Bearer ${state.token}` },
+      body: JSON.stringify({ text: text.slice(0, 500), lang }),
+    });
+    if (!res.headers.get('content-type')?.includes('audio')) {
+      _serverTtsDead = true;   // {"available": false, ...}
+      return false;
+    }
+    const blob = await res.blob();
+    if (_ttsAudio) _ttsAudio.pause();
+    _ttsAudio = new Audio(URL.createObjectURL(blob));
+    _ttsAudio.play();
+    return true;
+  } catch { return false; }
+}
+
+async function speak(text, lang) {
+  if (!text) return;
+  const isKn = lang === 'kn' || /[ಀ-೿]/.test(text);
+  const code = isKn ? 'kn-IN' : 'en-IN';
+  const voices = window.speechSynthesis
+    ? speechSynthesis.getVoices() : [];
+  const voice = voices.find(v => v.lang === code)
+    || voices.find(v => v.lang?.toLowerCase().startsWith(isKn ? 'kn' : 'en'));
+
+  // Kannada with no local voice → server TTS (browser default voice
+  // cannot pronounce Kannada; it either mangles or skips the text).
+  if (isKn && !voice) {
+    if (await speakViaServer(text, code)) return;
+    console.warn('No Kannada voice locally and server TTS unavailable — '
+      + 'set OPENAI_API_KEY on the backend to enable Kannada audio.');
+    return;  // don't voice Kannada with an English voice — it's garbage
+  }
+
+  if (!window.speechSynthesis) return;
   const u = new SpeechSynthesisUtterance(text.slice(0, 220));
-  u.lang = lang === 'kn' ? 'kn-IN' : 'en-IN';
+  u.lang = code;
   u.rate = 1.0;
+  if (voice) u.voice = voice;
   speechSynthesis.cancel();
   speechSynthesis.speak(u);
 }
@@ -896,14 +981,46 @@ async function loadInsights() {
   body.appendChild(renderTable(cols, prof.offenders));
 }
 
+// Officer feedback on an AI output — one tap, lands in the audit trail.
+function feedbackButtons(target) {
+  const wrap = el('div', { class: 'flex gap-1 shrink-0' });
+  const send = async (useful, btn) => {
+    try {
+      await api('/feedback', { method: 'POST',
+        body: JSON.stringify({ target, useful }) });
+      wrap.querySelectorAll('button').forEach(b => b.disabled = true);
+      btn.classList.add('bg-accent', 'text-white');
+    } catch {}
+  };
+  const mk = (glyph, useful, title) => {
+    const b = el('button', {
+      class: 'px-1.5 py-0.5 rounded bg-ink-700 border border-ink-600 hover:bg-ink-600 text-xs',
+      title,
+    }, glyph);
+    b.addEventListener('click', () => send(useful, b));
+    return b;
+  };
+  wrap.append(mk('👍', true, 'This warning is useful'),
+              mk('👎', false, 'Not useful / false alarm'));
+  return wrap;
+}
+
 async function loadPredict() {
   const r = await api('/predict');
   const body = $('#predictBody');
   body.innerHTML = '';
-  const header = el('div', { class: 'mb-4' }, [
+  const header = el('div', { class: 'mb-4 flex items-center justify-between gap-3' }, [
     el('div', { class: 'text-sm text-slate-400' },
       `Comparing ${r.window_current[0]} → ${r.window_current[1]} against prior 30 days`),
   ]);
+  // Weekly report: SP's Monday-morning brief (admin / dysp only).
+  if (['admin', 'dysp'].includes(state.session?.role)) {
+    const btn = el('button', {
+      class: 'px-3 py-1.5 rounded bg-ink-700 border border-ink-600 hover:bg-ink-600 text-sm shrink-0',
+    }, '📄 Weekly report');
+    btn.addEventListener('click', () => downloadWeeklyReport(btn));
+    header.appendChild(btn);
+  }
   body.appendChild(header);
   if (!r.warnings.length) {
     body.appendChild(el('div', { class: 'text-emerald-400 mb-6' },
@@ -916,7 +1033,10 @@ async function loadPredict() {
           el('div', { class: 'font-semibold' }, `${w.district} · ${w.category}`),
           el('div', { class: 'text-sm text-slate-300 mt-1' }, w.message),
         ]),
-        el('div', { class: `badge ${w.severity}` }, w.severity),
+        el('div', { class: 'flex items-center gap-2' }, [
+          el('div', { class: `badge ${w.severity}` }, w.severity),
+          feedbackButtons(`warning:${w.district}|${w.category}`),
+        ]),
       ]));
     }
     body.appendChild(list);
@@ -952,6 +1072,62 @@ async function loadPredict() {
     }
     body.appendChild(grid);
   }
+
+  // --- Patrol recommendations: hotspot × time-of-day, the actionable half ---
+  try {
+    const p = await api('/patrol');
+    if (p.recommendations?.length) {
+      body.appendChild(el('h3', {
+        class: 'text-xs uppercase tracking-wider text-slate-400 mt-8 mb-1',
+      }, 'Recommended patrol windows'));
+      body.appendChild(el('p', { class: 'text-[11px] text-slate-500 mb-3' },
+        `Station × 4-hour window with the highest incident concentration, last ${p.window_days} days.`));
+      const grid2 = el('div', {
+        class: 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3',
+      });
+      for (const rec of p.recommendations) {
+        grid2.appendChild(el('div', { class: 'hotspot-card flex items-center justify-between gap-3' }, [
+          el('div', {}, [
+            el('div', { class: 'font-semibold text-sm' }, rec.station),
+            el('div', { class: 'text-xs text-slate-400' }, tVal(rec.district)),
+          ]),
+          el('div', { class: 'text-right' }, [
+            el('div', { class: 'font-bold text-khaki-500' }, rec.window),
+            el('div', { class: 'text-[10px] text-slate-500' },
+              `${rec.crimes} incidents · ${rec.heinous} heinous`),
+          ]),
+        ]));
+      }
+      body.appendChild(grid2);
+    }
+  } catch {}
+}
+
+// Download the weekly district report (PDF from SmartBrowz when deployed,
+// self-contained HTML locally — honest fallback, print-to-PDF works).
+async function downloadWeeklyReport(btn) {
+  const old = btn.textContent;
+  btn.textContent = '… generating';
+  btn.disabled = true;
+  try {
+    const res = await fetch(API_BASE + '/report/weekly', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${state.token}` },
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const blob = await res.blob();
+    const isPdf = res.headers.get('content-type')?.includes('pdf');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `ksp-weekly-report.${isPdf ? 'pdf' : 'html'}`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) {
+    alert(`Report failed: ${e.message}`);
+  } finally {
+    btn.textContent = old;
+    btn.disabled = false;
+  }
 }
 
 // ---------------------------------------------------------------- audit
@@ -965,6 +1141,30 @@ async function loadAudit(firFilter) {
     if (firFilter) {
       body.appendChild(el('div', { class: 'text-xs text-slate-400 mb-3' },
         `${r.entries.length} audit entr${r.entries.length === 1 ? 'y' : 'ies'} touching "${firFilter}"`));
+      // Case linkage: related FIRs by shared-evidence score, with reasons.
+      try {
+        const lk = await api(`/case/${encodeURIComponent(firFilter)}/linked`);
+        if (lk.linked?.length) {
+          body.appendChild(el('h3',
+            { class: 'text-xs uppercase tracking-wider text-slate-400 mb-2' },
+            `Linked cases (${lk.linked.length})`));
+          const box = el('div', { class: 'space-y-2 mb-5' });
+          for (const c of lk.linked) {
+            box.appendChild(el('div',
+              { class: 'p-3 rounded-lg bg-ink-800 border border-ink-600 text-sm' }, [
+                el('div', { class: 'flex items-center gap-2' }, [
+                  el('span', { class: 'font-mono text-accent' }, c.crime_no),
+                  el('span', {}, `${tVal(c.crime_type)} · ${tVal(c.district)} · ${c.date}`),
+                  el('span', { class: 'ml-auto px-2 py-0.5 rounded bg-ink-700 text-[11px]' },
+                     `score ${c.score}`),
+                ]),
+                el('div', { class: 'text-[11px] text-slate-500 mt-1' },
+                   c.reasons.join(' · ')),
+              ]));
+          }
+          body.appendChild(box);
+        }
+      } catch {} // 404/403 → no linkage section, audit rows still shown
     }
     const columns = ['timestamp', 'user_id', 'role', 'action', 'query', 'result_summary'];
     body.appendChild(renderTable(columns, r.entries));
