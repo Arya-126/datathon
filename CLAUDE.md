@@ -59,7 +59,9 @@ frontend/app.js ── POST /chat { query, history, conversation_id } ──► 
       ▼
 llm.nl_to_sql(query, history, capp)
   ├─ Catalyst QuickML (CATALYST_QUICKML_ENDPOINT_KEY + request context)
-  ├─ Claude (ANTHROPIC_API_KEY — a Catalyst Connection credential in prod)
+  ├─ rotating hosted-LLM chain: Gemini key pool → Groq → OpenRouter →
+  │    OpenAI → Anthropic (raw HTTP, per-key 429 cooldowns — see
+  │    _providers() in llm.py; keys documented in .env.example)
   └─ _fallback keyword rules (bilingual EN/KN, always works)
       │
       ▼
@@ -127,7 +129,7 @@ Things about this shape that are load-bearing:
 | `backend/main.py` | FastAPI app, all routes, role policy (sqlglot scope injection), conversations, PDF export, jobs, Data Store sync |
 | `backend/db.py` | FIR schema DDL (ER-exact; deviations documented at top), `LLM_SCHEMA_DOC`, and the load-bearing cursor split: `cursor()` is read/write for app tables (sessions, audit, conversations); `read_cursor()` opens a separate read-only SQLite connection and is the ONLY thing LLM-generated SQL runs on — do not merge them |
 | `backend/seed.py` | Deterministic synthetic data — 15 districts, 112 units, 450 officers, 1800 FIRs/24 months, ER-exact `CrimeNo`, 6 syndicates |
-| `backend/llm.py` | Provider chain QuickML → Claude → bilingual keyword fallback; `is_safe_sql` |
+| `backend/llm.py` | Rotating provider chain QuickML → Gemini/Groq/OpenRouter/OpenAI/Anthropic → bilingual keyword fallback; `is_safe_sql`; server TTS chain (Sarvam → Google → OpenAI) for Kannada audio |
 | `backend/analytics.py` | hotspots (district+station), trends, network (scoped), predict, forecast, demographics, repeat offenders, chargesheet rate |
 | `backend/jobs.py` | `/jobs/refresh` target: PersonAlias entity resolution (exact + fuzzy) + cache warm — wire to Catalyst Cron |
 | `backend/catalyst.py` | All Catalyst service adapters with local fallbacks + honest `service_status()` |

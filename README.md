@@ -10,15 +10,24 @@ the **real Karnataka FIR schema** (30 normalized tables per
 
 | Judged feature | Where it lives |
 |---|---|
-| Natural language chatbot (English + Kannada) | `backend/llm.py` — NL→SQL chain: **Catalyst QuickML → Gemini Flash → keyword fallback**; fully bilingual in every mode |
-| Voice-enabled interaction | On-device Web Speech (`kn-IN` / `en-IN`) + server `/voice/asr`·`/voice/tts` endpoints (env-gated; Zia has no GA speech API — documented honestly) |
+| Natural language chatbot (English + Kannada) | `backend/llm.py` — NL→SQL rotating chain: **Catalyst QuickML → Gemini key pool → Groq → OpenRouter → OpenAI → Anthropic → keyword fallback**; a key that 429s goes on cooldown and the next takes over; fully bilingual in every mode, colloquial district names auto-mapped (Bangalore → Bengaluru Urban) |
+| Voice-enabled interaction | On-device Web Speech (`kn-IN` / `en-IN`) for input + English output; **server TTS chain (Sarvam AI → Google Cloud TTS → OpenAI TTS)** for Kannada audio — no browser/Windows kn-IN voice exists; 🔊 re-speak button on every answer |
 | Context-aware conversations | Last 6 turns + the executed SQL fed back to the LLM; conversations persist in `conversation`/`conversation_turn` tables and survive reloads |
-| PDF export of conversation history | `POST /export/pdf` — **Catalyst SmartBrowz** server-side render (proper Kannada glyphs), archived to **Stratus**; jsPDF client fallback offline |
-| Criminal network visualization | `analytics.network` — co-accused edges + cross-case identity via `PersonAlias` (nightly entity resolution in `jobs.py`) + vis-network |
-| Crime trend & hotspot detection | `/trends`, `/hotspots?level=district\|station` — Leaflet map with heat circles + ranked cards |
-| Predictive analytics & early warnings | `/predict` — 30-day delta warnings **+ 30-day forward forecast** (weighted-window statistical baseline; Zia AutoML upgrade path) with push alerts |
-| Explainable AI with audit trails | Every answer returns the exact SQL + policy notes; every route writes `audit_log` (mirrored to Data Store); `/audit/fir/{crime_no}` reverse lookup |
-| Role-based secure access | `admin` / `dysp` / `sho` / `io` / `analyst` enforced **on the SQL itself** via sqlglot rewrite — CTE-safe, child-table-safe (see below) |
+| PDF export of conversation history | `POST /export/pdf` — **Catalyst SmartBrowz** server-side render (proper Kannada glyphs), archived to **Stratus**; jsPDF client fallback offline. Plus `POST /report/weekly` — one-click bilingual SP's weekly district brief |
+| Criminal network visualization | `analytics.network` — co-accused edges + cross-case identity via `PersonAlias` (nightly entity resolution in `jobs.py`) + vis-network; node sizes scope-respecting |
+| Crime trend & hotspot detection | `/trends`, `/hotspots?level=district\|station` — Leaflet map with heat circles + ranked cards; hotspot counts scoped in-query per role |
+| Predictive analytics & early warnings | `/predict` — 30-day delta warnings **+ 30-day forward forecast** (explainable weighted-window baseline). Prevention is a closed loop: nightly Cron pushes spike alerts **routed to the affected district's own recipients** (`CATALYST_ALERT_ROUTES`), `/patrol` turns hotspots × time-of-day into duty-roster windows, 👍/👎 feedback per warning lands in the audit trail |
+| Explainable AI with audit trails | Every answer returns the exact SQL + policy notes; every route writes `audit_log` (mirrored to Data Store); `/audit/fir/{crime_no}` reverse lookup; reading the audit log is itself audited |
+| Role-based secure access | `admin` / `dysp` / `sho` / `io` / `analyst` enforced **on the SQL itself** via sqlglot rewrite — CTE-safe, child-table-safe, outer-LIMIT enforced (see below); optional `KSP_DEMO_PASSWORD` gate on /login |
+
+### Beyond the checklist — investigator lead generation
+
+| Capability | Where it lives |
+|---|---|
+| **Case linkage** — "which FIRs relate to this one?" | `GET /case/{crime_no}/linked` — candidates scored on shared persons (PersonAlias), act/section overlap, same modus, spatio-temporal proximity; every suggestion carries readable reasons. Surfaced in the FIR lookup tab |
+| **Patrol recommendations** | `GET /patrol` — station × 4-hour window concentration; prediction that changes a duty roster |
+| **Weekly district brief** | `POST /report/weekly` — FIRs vs prior week, top categories/stations, warnings, patrol windows; PDF via SmartBrowz, bilingual headings |
+| **Officer feedback loop** | `POST /feedback` — one-tap useful/not-useful per warning; audit-logged, future training labels |
 
 ## Architecture
 
@@ -27,7 +36,8 @@ frontend (vanilla JS + Tailwind + Leaflet + vis-network + Chart.js, CDN)
         │  POST /chat { query, history, conversation_id }
         ▼
 FastAPI (main.py)                          ← Catalyst AppSail
-        │  ① NL→SQL: QuickML → Gemini → keyword fallback
+        │  ① NL→SQL: QuickML → rotating LLM chain (Gemini pool →
+        │     Groq → OpenRouter → OpenAI → Anthropic) → keyword fallback
         │  ② safety validator (single SELECT, keyword blocklist)
         │  ③ role-policy rewrite (sqlglot: scope every CaseMaster and
         │     case-child reference; PII/demographic DLP; LIMIT)
@@ -92,10 +102,12 @@ chargesheets, and complainant demographics.
 
 ### Without an API key
 
-Leave `GEMINI_API_KEY` blank — `/chat` falls back to a bilingual
+Leave every LLM key blank — `/chat` falls back to a bilingual
 keyword-based query builder. The header badge shows which provider answered
-(**QuickML / Gemini / fallback**); the explainability drawer shows it per
-answer.
+(**QuickML / Gemini / Groq / … / fallback**); the explainability drawer
+shows it per answer. Stack multiple keys in `.env` (see `.env.example`) and
+quota exhaustion fails over between them automatically. For Kannada
+*audio*, set `SARVAM_API_KEY` (free, no card — dashboard.sarvam.ai).
 
 ## Try it
 
@@ -114,15 +126,22 @@ Switch roles to see enforcement:
 - **sho** (pick a station) — every query auto-constrained to that station;
   even a state-wide network question comes back station-scoped (see the
   policy note under the answer)
-- **admin** — Audit tab shows every query; try the FIR reverse lookup
+- **admin** — Audit tab shows every query; try the FIR reverse lookup —
+  it also surfaces **linked cases** with shared-evidence scores + reasons
+- **admin / dysp** — Early Warnings tab: patrol windows, 👍/👎 feedback,
+  and the 📄 Weekly report button (bilingual PDF/HTML)
 
 ## Deploy to Catalyst
 
 See **[DEPLOY.md](DEPLOY.md)**. Short version: `scripts/prepare-deploy.ps1`
-→ `catalyst deploy` (AppSail serves API + UI at one URL) → import
-`datastore_export/*.csv` in the console (creates the 30 Data Store tables) or
-`POST /admin/datastore/sync {"direction":"push"}` → add a Catalyst Cron
-hitting `/jobs/refresh` nightly.
+builds `appsail/ksp-ai-backend/`; zip it and upload via console
+(AppSail → Create Deployment, startup command `python3 main.py`, port 9000
+— the managed runtime doesn't run pip, so `main.py` self-bootstraps its
+requirements on first boot). Add your LLM/TTS keys under AppSail →
+Configuration → Environment Variables. Data Store provisioning is optional
+(the app runs fully on seeded SQLite; `/health` reports the mode honestly).
+Add a Catalyst Cron hitting `/jobs/refresh` nightly for entity resolution +
+proactive alerts.
 
 ## Layout
 
@@ -131,9 +150,12 @@ backend/
   main.py         FastAPI app, routes, sqlglot role policy, conversations
   db.py           FIR schema (ER-exact) + read-only cursor + LLM schema doc
   seed.py         deterministic synthetic Karnataka data
-  llm.py          QuickML → Gemini Flash → bilingual fallback NL→SQL
-  analytics.py    hotspots (district/station) / trends / network / predict / forecast
-  jobs.py         nightly entity resolution (PersonAlias) + cache warm
+  llm.py          rotating LLM chain (Gemini/Groq/OpenRouter/OpenAI/Anthropic)
+                  → bilingual fallback NL→SQL; Kannada TTS chain (Sarvam…)
+  analytics.py    hotspots / trends / network / predict / forecast /
+                  linked_cases / patrol_windows / weekly_summary
+  jobs.py         nightly entity resolution (PersonAlias) + cache warm +
+                  district-routed spike alerts
   catalyst.py     zcatalyst-sdk adapters: Data Store sync, Auth, Cache,
                   Push, SmartBrowz, Zia, QuickML, Stratus — honest fallbacks
 frontend/         vanilla JS UI (chat, map, network, insights, audit)
