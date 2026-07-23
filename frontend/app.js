@@ -101,6 +101,7 @@ const I18N = {
     'nav.cases': '📁 Cases',
     'nav.hotspots': '🌍 Geography',
     'nav.predict': '⚡ Predictions',
+    'nav.network': '🔗 Criminal Network',
     'nav.insights': '📄 Reports',
     'nav.audit': '⚙ Administration',
     'sidebar.signedInAs': 'Signed in as',
@@ -148,6 +149,7 @@ const I18N = {
     'nav.cases': '📁 ಪ್ರಕರಣಗಳು',
     'nav.hotspots': '🌍 ಭೂಗೋಳ',
     'nav.predict': '⚡ ಮುನ್ಸೂಚನೆಗಳು',
+    'nav.network': '🔗 ಅಪರಾಧ ಜಾಲ',
     'nav.insights': '📄 ವರದಿಗಳು',
     'nav.audit': '⚙ ಆಡಳಿತ',
     'sidebar.signedInAs': 'ಸೈನ್ ಇನ್ ಆಗಿರುವವರು',
@@ -397,6 +399,7 @@ function enterApp() {
   if (auditBtn) auditBtn.style.display = s.role === 'admin' ? '' : 'none';
   showView('chat');
   applyI18n();
+  loadNotifications();
 }
 
 function setupPromptSuggestions() {
@@ -2387,6 +2390,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
   });
   $('#pdfBtn').addEventListener('click', exportPDF);
+  const exportPdfBtn = document.getElementById('exportPdfBtn');
+  if (exportPdfBtn) {
+    exportPdfBtn.addEventListener('click', exportPDF);
+  }
 
   // Custom chat page controls binding
   const ttsToggle = document.getElementById('ttsToggleBtn');
@@ -2451,6 +2458,68 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('#logoutBtn').addEventListener('click', () => {
     clearSession(); location.reload();
   });
+
+  // Notification loader
+  async function loadNotifications() {
+    try {
+      const data = await api('/predict');
+      const warnings = data.warnings || [];
+      const list = document.getElementById('notificationList');
+      const badge = document.getElementById('notificationBadge');
+      if (!list) return;
+      if (!warnings.length) {
+        list.innerHTML = '<div class="p-3 text-slate-500 italic text-center">No active spike warnings.</div>';
+        if (badge) badge.classList.add('hidden');
+        return;
+      }
+      if (badge) badge.classList.remove('hidden');
+      list.innerHTML = warnings.map(w => `
+        <div class="p-2 rounded bg-ink-900 border border-ink-600 hover:border-accent transition cursor-pointer" onclick="showView('predict')">
+          <div class="font-bold text-amber-400 text-[11px]">${w.category || 'Warning'} · ${w.district || 'Statewide'}</div>
+          <div class="text-[10px] text-slate-300 mt-0.5">${w.message || ''}</div>
+        </div>
+      `).join('');
+    } catch (e) {
+      console.error('Failed to load notifications:', e);
+    }
+  }
+
+  // Header search bar → navigate to Cases and search
+  const headerSearch = document.getElementById('headerSearchInput');
+  if (headerSearch) {
+    headerSearch.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const q = headerSearch.value.trim();
+        if (!q) return;
+        showView('cases');
+        const searchInput = document.getElementById('caseFilterSearch');
+        if (searchInput) searchInput.value = q;
+        try {
+          const r = await api('/cases/search?q=' + encodeURIComponent(q));
+          handleCaseSearchList(r.cases);
+        } catch (err) {
+          console.error('Header search failed:', err);
+        }
+      }
+    });
+  }
+
+  // Notification bell → show spike warnings dropdown
+  const bellBtn = document.getElementById('notificationBellBtn');
+  if (bellBtn) {
+    bellBtn.addEventListener('click', () => {
+      const dd = document.getElementById('notificationDropdown');
+      if (dd) dd.classList.toggle('hidden');
+    });
+    // Close dropdown on outside click
+    document.addEventListener('click', (e) => {
+      const dd = document.getElementById('notificationDropdown');
+      if (dd && !dd.contains(e.target) && !bellBtn.contains(e.target)) {
+        dd.classList.add('hidden');
+      }
+    });
+  }
 
   const applyBtn = document.getElementById('trendApplyBtn');
   if (applyBtn) {

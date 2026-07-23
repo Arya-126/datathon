@@ -118,6 +118,9 @@ tailwind.config = {
         <button data-view="predict" class="nav-btn flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-slate-300 hover:bg-ink-700/50 hover:text-white transition duration-150" data-i18n="nav.predict">
           <span class="text-sm">⚡</span> <span class="tracking-wide">Predictions</span>
         </button>
+        <button data-view="network" class="nav-btn flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-slate-300 hover:bg-ink-700/50 hover:text-white transition duration-150" data-i18n="nav.network">
+          <span class="text-sm">🔗</span> <span class="tracking-wide">Criminal Network</span>
+        </button>
         <button data-view="insights" class="nav-btn flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-slate-300 hover:bg-ink-700/50 hover:text-white transition duration-150" data-i18n="nav.insights">
           <span class="text-sm">📄</span> <span class="tracking-wide">Reports</span>
         </button>
@@ -149,7 +152,7 @@ tailwind.config = {
         <!-- Search bar -->
         <div class="hidden md:flex items-center flex-1 max-w-sm">
           <div class="relative w-full">
-            <input type="text" placeholder="Search suspects, cases, locations..." class="w-full bg-ink-950 border border-ink-600 rounded-lg px-3.5 py-1.5 pl-8 text-xs text-slate-300 outline-none focus:border-accent transition" />
+            <input id="headerSearchInput" type="text" placeholder="Search suspects, cases, locations..." class="w-full bg-ink-950 border border-ink-600 rounded-lg px-3.5 py-1.5 pl-8 text-xs text-slate-300 outline-none focus:border-accent transition" />
             <span class="absolute left-3 top-2 text-[10px] text-slate-500">🔍</span>
           </div>
         </div>
@@ -166,10 +169,14 @@ tailwind.config = {
         </div>
         
         <!-- Notification bell -->
-        <button class="relative w-8 h-8 rounded-lg bg-ink-700/50 hover:bg-ink-700 border border-ink-600 flex items-center justify-center text-slate-300 transition">
+        <button id="notificationBellBtn" class="relative w-8 h-8 rounded-lg bg-ink-700/50 hover:bg-ink-700 border border-ink-600 flex items-center justify-center text-slate-300 transition" title="Spike warnings">
           <span>🔔</span>
-          <span class="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-red-500 rounded-full"></span>
+          <span id="notificationBadge" class="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-red-500 rounded-full hidden"></span>
         </button>
+        <div id="notificationDropdown" class="absolute top-12 right-16 w-80 bg-ink-800 border border-ink-600 rounded-xl shadow-2xl z-50 hidden overflow-hidden">
+          <div class="px-4 py-2.5 border-b border-ink-600 text-[10px] font-bold uppercase tracking-widest text-slate-400">Active Warnings</div>
+          <div id="notificationList" class="max-h-64 overflow-y-auto p-2 space-y-1.5 text-xs"></div>
+        </div>
 
         <!-- User avatar dropdown -->
         <div class="flex items-center gap-2.5 pl-4 border-l border-ink-600">
@@ -216,6 +223,7 @@ tailwind.config = {
               <div class="flex items-center gap-1.5">
                 <button id="voiceBtn" class="w-8 h-8 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white flex items-center justify-center transition shrink-0 text-sm shadow-sm" title="Voice input">🎙</button>
                 <button id="ttsToggleBtn" class="w-8 h-8 rounded-full bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-300 hover:text-white flex items-center justify-center transition shrink-0 text-xs shadow-sm" title="Voice Audio readback toggle">🔊</button>
+                <button id="exportPdfBtn" class="w-8 h-8 rounded-full bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-300 hover:text-white flex items-center justify-center transition shrink-0 text-xs shadow-sm" title="Export conversation as PDF">📄</button>
                 <button id="resetChatBtn" class="w-8 h-8 rounded-full bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-300 hover:text-white flex items-center justify-center transition shrink-0 text-xs shadow-sm" title="Reset chat history">↩</button>
                 <button id="attachmentBtn" class="w-8 h-8 rounded-full bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-300 hover:text-white flex items-center justify-center transition shrink-0 text-xs shadow-sm" title="Attach file">📎</button>
                 <input type="file" id="chatFileInput" class="hidden" />
