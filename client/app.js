@@ -336,6 +336,11 @@ async function initLogin() {
     $('#scopeEmp').classList.toggle('hidden', role !== 'io');
   });
 
+  // Enter key on Officer ID or Password triggers login
+  const triggerLogin = (e) => { if (e.key === 'Enter') $('#loginBtn').click(); };
+  $('#loginUser')?.addEventListener('keydown', triggerLogin);
+  $('#loginPassword')?.addEventListener('keydown', triggerLogin);
+
   $('#loginBtn').addEventListener('click', async () => {
     const role = $('#loginRole').value;
     const body = {
@@ -830,9 +835,11 @@ async function sendChat() {
   state.history.push({ role: 'user', content: q });
   state.transcript.push({ role: 'user', text: q });
 
+  const thinkingBubble = el('div', { class: 'msg bot text-slate-400 italic text-xs border border-ink-600/30 shadow-sm flex items-center gap-2' });
+  thinkingBubble.innerHTML = '<span class="thinking-dots"><span></span><span></span><span></span></span> <span class="text-[10px]">Thinking</span>';
   const thinking = el('div', { class: 'flex w-full mb-3' }, [
     el('div', { class: 'w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 font-bold flex items-center justify-center text-[10px] mr-3 shrink-0' }, 'AI'),
-    el('div', { class: 'msg bot text-slate-400 italic text-xs border border-ink-600/30 shadow-sm' }, 'Thinking…')
+    thinkingBubble
   ]);
   $('#chatLog').appendChild(thinking);
   $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
@@ -1337,6 +1344,20 @@ function updateHotspotLegend(spots, level) {
     </div>
   `;
   legendEl.appendChild(scaleSection);
+}
+
+function showSkeleton(container, count = 4) {
+  if (!container) return;
+  container.innerHTML = '';
+  for (let i = 0; i < count; i++) {
+    const card = document.createElement('div');
+    card.className = 'skeleton skeleton-card mb-3 rounded-xl';
+    container.appendChild(card);
+  }
+}
+function showSkeletonChart(container) {
+  if (!container) return;
+  container.innerHTML = '<div class="skeleton skeleton-chart rounded-xl"></div>';
 }
 
 async function loadHotspots() {
@@ -2934,7 +2955,115 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // --- Theme toggle ---
+  function applyChartTheme() {
+    const isLight = document.body.classList.contains('light-theme');
+    if (typeof Chart === 'undefined') return;
+    const tickColor = isLight ? '#334155' : '#94a3b8';
+    const gridColor = isLight ? '#e2e8f0' : '#1f2937';
+    const legendColor = isLight ? '#1e293b' : '#cbd5e1';
+    Chart.defaults.color = tickColor;
+    Chart.defaults.borderColor = gridColor;
+    Object.values(Chart.instances || {}).forEach(c => {
+      if (c.options?.scales) {
+        Object.keys(c.options.scales).forEach(axis => {
+          const s = c.options.scales[axis];
+          if (s.ticks) s.ticks.color = tickColor;
+          if (s.grid) s.grid.color = gridColor;
+          if (!s.grid) s.grid = { color: gridColor };
+        });
+      }
+      if (c.options?.plugins?.legend?.labels) {
+        c.options.plugins.legend.labels.color = legendColor;
+      } else if (c.options?.plugins?.legend) {
+        c.options.plugins.legend.labels = { color: legendColor };
+      }
+      if (c.options?.plugins?.title) {
+        c.options.plugins.title.color = legendColor;
+      }
+      c.update('none');
+    });
+  }
+
+  const themeBtn = document.getElementById('themeToggleBtn');
+  const themeIcon = document.getElementById('themeIcon');
+  if (localStorage.getItem('ksp-theme') === 'light') {
+    document.body.classList.add('light-theme');
+    if (themeBtn) themeBtn.classList.add('light');
+    if (themeIcon) themeIcon.textContent = '☀️';
+  }
+  applyChartTheme();
+  if (themeBtn) {
+    themeBtn.addEventListener('click', () => {
+      document.body.classList.toggle('light-theme');
+      const isLight = document.body.classList.contains('light-theme');
+      localStorage.setItem('ksp-theme', isLight ? 'light' : 'dark');
+      themeBtn.classList.toggle('light', isLight);
+      if (themeIcon) themeIcon.textContent = isLight ? '☀️' : '🌙';
+      applyChartTheme();
+    });
+  }
+
+  // --- Responsive hamburger ---
+  const hamburger = document.getElementById('hamburgerBtn');
+  const sidebar = document.getElementById('appSidebar');
+  const overlay = document.getElementById('sidebarOverlay');
+  function updateHamburger() {
+    if (window.innerWidth <= 1024) {
+      if (hamburger) hamburger.style.display = 'flex';
+    } else {
+      if (hamburger) hamburger.style.display = 'none';
+      if (sidebar) sidebar.classList.remove('open');
+      if (overlay) overlay.classList.remove('open');
+    }
+  }
+  updateHamburger();
+  window.addEventListener('resize', updateHamburger);
+  if (hamburger) {
+    hamburger.addEventListener('click', () => {
+      sidebar?.classList.toggle('open');
+      overlay?.classList.toggle('open');
+    });
+  }
+  if (overlay) {
+    overlay.addEventListener('click', () => {
+      sidebar?.classList.remove('open');
+      overlay.classList.remove('open');
+    });
+  }
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (window.innerWidth <= 1024) {
+        sidebar?.classList.remove('open');
+        overlay?.classList.remove('open');
+      }
+    });
+  });
+
+  // --- Keyboard shortcuts ---
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      e.preventDefault();
+      const searchInput = document.getElementById('headerSearchInput');
+      if (searchInput) searchInput.focus();
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'e') {
+      e.preventDefault();
+      const pdfBtn = document.getElementById('pdfBtn');
+      if (pdfBtn) pdfBtn.click();
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key >= '1' && e.key <= '7') {
+      e.preventDefault();
+      const views = ['chat', 'trends', 'cases', 'hotspots', 'predict', 'network', 'insights'];
+      const idx = parseInt(e.key) - 1;
+      if (idx < views.length) {
+        const btn = document.querySelector(`[data-view="${views[idx]}"]`);
+        if (btn && !btn.classList.contains('hidden')) btn.click();
+      }
+    }
+  });
+
   applyI18n();
   await initLogin();
-  await tryRestoreSession();  // reload survival — skips login if token valid
+  await tryRestoreSession();
 });
