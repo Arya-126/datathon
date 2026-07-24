@@ -15,6 +15,12 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <link rel="stylesheet" href="/static/styles.css" />
+<style>
+  select option {
+    background-color: #18202c !important;
+    color: #e2e8f0 !important;
+  }
+</style>
 <script>
 tailwind.config = {
   theme: {
@@ -224,8 +230,22 @@ tailwind.config = {
             </div>
           </div>
 
-          <!-- Bottom Grid: DYNAMIC RESPONSE CARDS + PROMPT SUGGESTIONS -->
-          <div class="grid grid-cols-[1.6fr_1fr] gap-6 shrink-0">
+          <!-- Suggested Prompts Line -->
+          <div class="flex items-center gap-3 overflow-x-auto pb-1 shrink-0 scrollbar-thin">
+            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider whitespace-nowrap">Suggested Prompts:</span>
+            <button class="prompt-suggestion-btn whitespace-nowrap px-3.5 py-1.5 rounded-full bg-ink-900 hover:bg-ink-800 border border-ink-600 text-[11px] text-slate-300 transition hover:text-white shadow-sm font-medium">
+              Which districts had the most cyber crime?
+            </button>
+            <button class="prompt-suggestion-btn whitespace-nowrap px-3.5 py-1.5 rounded-full bg-ink-900 hover:bg-ink-800 border border-ink-600 text-[11px] text-slate-300 transition hover:text-white shadow-sm font-medium">
+              The top police stations by robbery detection rate are
+            </button>
+            <button class="prompt-suggestion-btn whitespace-nowrap px-3.5 py-1.5 rounded-full bg-ink-900 hover:bg-ink-800 border border-ink-600 text-[11px] text-slate-300 transition hover:text-white shadow-sm font-medium">
+              Show repeat offenders in Mangaluru
+            </button>
+          </div>
+
+          <!-- Full Width Dynamic Response Cards -->
+          <div class="w-full shrink-0">
             <!-- Dynamic Response Cards -->
             <div class="bg-ink-900 border border-ink-600 rounded-xl p-5 flex flex-col space-y-3 min-h-[360px]">
               <div class="text-[11px] font-bold uppercase tracking-widest text-slate-400 border-b border-ink-600 pb-2">Dynamic Response Cards</div>
@@ -233,25 +253,6 @@ tailwind.config = {
                 <div class="col-span-2 flex flex-col items-center justify-center text-center py-8 text-slate-500 italic text-xs">
                   <span>Submit a query to view dynamic charts and result tables here.</span>
                 </div>
-              </div>
-            </div>
-
-            <!-- Prompt Suggestions -->
-            <div class="bg-ink-900 border border-ink-600 rounded-xl p-5 flex flex-col space-y-3 min-h-[360px]">
-              <div class="text-[11px] font-bold uppercase tracking-widest text-slate-400 border-b border-ink-600 pb-2">Prompt Suggestions</div>
-              <div class="flex flex-col gap-2.5">
-                <button class="prompt-suggestion-btn text-left px-3.5 py-2.5 rounded-lg bg-ink-800 hover:bg-ink-700 border border-ink-600 text-xs text-slate-300 transition leading-snug truncate shadow-sm">
-                  Which districts had the most cyber crime?
-                </button>
-                <button class="prompt-suggestion-btn text-left px-3.5 py-2.5 rounded-lg bg-ink-800 hover:bg-ink-700 border border-ink-600 text-xs text-slate-300 transition leading-snug truncate shadow-sm">
-                  Show monthly trend of crimes against women in Bengaluru Urban
-                </button>
-                <button class="prompt-suggestion-btn text-left px-3.5 py-2.5 rounded-lg bg-ink-800 hover:bg-ink-700 border border-ink-600 text-xs text-slate-300 transition leading-snug truncate shadow-sm">
-                  List top P.S. by robbery detection rate
-                </button>
-                <button class="prompt-suggestion-btn text-left px-3.5 py-2.5 rounded-lg bg-ink-800 hover:bg-ink-700 border border-ink-600 text-xs text-slate-300 transition leading-snug truncate shadow-sm">
-                  Show repeat offenders in Mangaluru
-                </button>
               </div>
             </div>
           </div>
@@ -326,7 +327,6 @@ tailwind.config = {
             </div>
             <div class="flex items-center gap-3">
               <span id="caseHeadStatus" class="px-3 py-1 rounded bg-amber-500/10 text-amber-500 border border-amber-500/20 text-xs font-bold shadow-sm">Investigation In-Progress</span>
-              <button id="caseHeaderDownloadBtn" class="px-3 py-1.5 rounded bg-ink-700 hover:bg-ink-600 border border-ink-600 text-xs text-slate-300 font-bold transition">Download</button>
             </div>
           </div>
 

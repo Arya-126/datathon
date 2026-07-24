@@ -26,3 +26,5 @@ dist/
 
 # Generated Data Store provisioning artefacts
 datastore_export/
+
+Unused/

@@ -338,7 +338,31 @@ async function initLogin() {
     $('#scopeEmp').classList.toggle('hidden', role !== 'io');
   });
 
+  // Password visibility toggle
+  const togglePwBtn = document.getElementById('togglePasswordBtn');
+  const pwInput = document.getElementById('loginPassword');
+  const eyeShow = document.getElementById('eyeIconShow');
+  const eyeHide = document.getElementById('eyeIconHide');
+  if (togglePwBtn && pwInput) {
+    togglePwBtn.addEventListener('click', () => {
+      const isPw = pwInput.type === 'password';
+      pwInput.type = isPw ? 'text' : 'password';
+      if (eyeShow && eyeHide) {
+        eyeShow.classList.toggle('hidden', isPw);
+        eyeHide.classList.toggle('hidden', !isPw);
+      }
+    });
+  }
+
+  const hideLoginError = () => {
+    const errDiv = document.getElementById('loginErrorMsg');
+    if (errDiv) errDiv.classList.add('hidden');
+  };
+  $('#loginPassword')?.addEventListener('input', hideLoginError);
+  $('#loginUser')?.addEventListener('input', hideLoginError);
+
   $('#loginBtn').addEventListener('click', async () => {
+    hideLoginError();
     const role = $('#loginRole').value;
     const body = {
       user_id: $('#loginUser').value.trim() || 'KSP-DEMO',
@@ -357,7 +381,25 @@ async function initLogin() {
       persistSession();
       enterApp();
     } catch (e) {
-      alert(`Login failed: ${e.message}`);
+      let msg = e.message || 'Login failed';
+      try {
+        const jsonIdx = msg.indexOf('{');
+        if (jsonIdx !== -1) {
+          const parsed = JSON.parse(msg.slice(jsonIdx));
+          if (parsed.detail) msg = parsed.detail;
+        }
+      } catch {}
+      if (msg.toLowerCase().includes('invalid demo password')) {
+        msg = 'Invalid password';
+      }
+      const errDiv = document.getElementById('loginErrorMsg');
+      const errText = document.getElementById('loginErrorText');
+      if (errDiv && errText) {
+        errText.textContent = msg;
+        errDiv.classList.remove('hidden');
+      } else {
+        alert(`Login failed: ${msg}`);
+      }
     }
   });
 }
@@ -840,15 +882,60 @@ async function sendChat() {
   $('#chatLog').appendChild(thinking);
   $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
 
+  // Show loading state on Dynamic Cards
+  const dynContainer = document.getElementById('dynamicCards');
+  if (dynContainer) {
+    dynContainer.innerHTML = `
+      <div class="col-span-2 flex flex-col items-center justify-center text-center py-10 gap-3">
+        <div class="animate-spin w-6 h-6 border-2 border-accent border-t-transparent rounded-full"></div>
+        <span class="text-slate-400 text-xs italic">Processing query…</span>
+      </div>
+    `;
+  }
+
+  // Helper: single chat API call with a 45s timeout
+  async function chatRequest() {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45000);
+    try {
+      const r = await api('/chat', {
+        method: 'POST',
+        body: JSON.stringify({
+          query: q,
+          history: state.history,
+          conversation_id: state.conversationId,
+        }),
+        signal: controller.signal,
+      });
+      return r;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   try {
-    const r = await api('/chat', {
-      method: 'POST',
-      body: JSON.stringify({
-        query: q,
-        history: state.history,
-        conversation_id: state.conversationId,
-      }),
-    });
+    let r;
+    try {
+      r = await chatRequest();
+    } catch (firstErr) {
+      // Retry once on timeout or network error (cold start resilience)
+      const isTimeout = firstErr.name === 'AbortError' ||
+                        firstErr.message?.includes('Failed to fetch');
+      if (isTimeout) {
+        if (dynContainer) {
+          dynContainer.innerHTML = `
+            <div class="col-span-2 flex flex-col items-center justify-center text-center py-10 gap-3">
+              <div class="animate-spin w-6 h-6 border-2 border-amber-400 border-t-transparent rounded-full"></div>
+              <span class="text-amber-400 text-xs font-medium">LLM warming up — retrying…</span>
+            </div>
+          `;
+        }
+        r = await chatRequest();
+      } else {
+        throw firstErr;
+      }
+    }
+
     thinking.remove();
     if (r.conversation_id) {
       state.conversationId = r.conversation_id;
@@ -875,10 +962,21 @@ async function sendChat() {
       rows: r.rows, columns: r.columns,
     });
     renderExplain(r, r.notes);
-    speak(prefix);
+    try { speak(prefix); } catch {}
   } catch (e) {
     thinking.remove();
     addMessage('bot', { prefix: `Error: ${e.message}` });
+    // Show error state in Dynamic Cards instead of leaving them blank
+    if (dynContainer) {
+      const isTimeout = e.name === 'AbortError';
+      dynContainer.innerHTML = `
+        <div class="col-span-2 flex flex-col items-center justify-center text-center py-10 text-xs gap-2">
+          <span class="text-2xl">${isTimeout ? '⏱️' : '⚠️'}</span>
+          <span class="text-rose-400 font-semibold">${isTimeout ? 'Request timed out' : 'Query failed'}</span>
+          <span class="text-slate-500 italic max-w-[300px]">${isTimeout ? 'The LLM took too long. Try a simpler query or retry.' : e.message || 'An error occurred processing your query.'}</span>
+        </div>
+      `;
+    }
   }
 }
 
@@ -987,6 +1085,26 @@ async function speakViaServer(text, lang) {
     _ttsAudio.play();
     return true;
   } catch { return false; }
+}
+
+async function speak(text) {
+  if (!state.ttsEnabled || !text) return;
+  const isKn = /[\u0C80-\u0CFF]/.test(text);
+  const lang = isKn ? 'kn' : 'en';
+
+  const played = await speakViaServer(text, lang);
+  if (played) return;
+
+  if ('speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = isKn ? 'kn-IN' : 'en-IN';
+      window.speechSynthesis.speak(u);
+    } catch (e) {
+      console.error('TTS error:', e);
+    }
+  }
 }
 
 // ---------------------------------------------------------------- hotspots
@@ -1200,15 +1318,25 @@ function renderHotspotMarkers() {
       ? (h.district || h.station)
       : (h.station.startsWith('P.S.') ? h.station : 'P.S. ' + h.station);
 
-    const burglaryCount = h.crime_breakdown?.["Crimes Against Property"] || Math.round(h.crimes * 0.4) || 12;
-    const assaultCount = h.crime_breakdown?.["Crimes Against Body"] || Math.round(h.crimes * 0.25) || 5;
+    // Build dynamic crime breakdown lines (top 4 categories)
+    let breakdownHtml = '';
+    const breakdown = h.crime_breakdown || {};
+    const sortedCategories = Object.entries(breakdown)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4);
+    if (sortedCategories.length > 0) {
+      breakdownHtml = sortedCategories
+        .map(([cat, cnt]) => `<div>${cnt} ${cat} Cases</div>`)
+        .join('');
+    } else {
+      breakdownHtml = `<div>${h.crimes || 0} Total Cases</div>`;
+    }
 
     const popupHtml = `
       <div style="font-family: Inter, system-ui, sans-serif; padding: 2px; color: #f3f4f6; font-size: 11px; min-width: 150px;">
         <div style="font-weight: 700; color: #ffffff; font-size: 12px; margin-bottom: 3px;">${stationTitle}:</div>
         <div style="font-weight: 500; line-height: 1.4; color: #d1d5db;">
-          <div>${burglaryCount} Burglary Cases</div>
-          <div>${assaultCount} Assault Cases</div>
+          ${breakdownHtml}
         </div>
         <div style="margin-top: 5px; padding-top: 4px; border-top: 1px solid #374151; font-size: 10px; color: #9ca3af;">
           <div>Intensity Score: <strong style="color: #60a5fa;">${intensity}</strong></div>
@@ -2145,100 +2273,276 @@ function feedbackButtons(target) {
   return wrap;
 }
 
+function generateSparklineSvg(direction) {
+  const uniqueId = Math.random().toString(36).substring(2, 7);
+  if (direction === 'rising') {
+    return `<svg class="w-full h-10 overflow-visible" viewBox="0 0 160 40" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="grad-rising-${uniqueId}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#f87171" stop-opacity="0.4"/>
+          <stop offset="100%" stop-color="#f87171" stop-opacity="0.0"/>
+        </linearGradient>
+      </defs>
+      <path d="M0,35 Q30,30 60,32 T120,15 T160,5 L160,40 L0,40 Z" fill="url(#grad-rising-${uniqueId})"/>
+      <path d="M0,35 Q30,30 60,32 T120,15 T160,5" fill="none" stroke="#f87171" stroke-width="2.5"/>
+    </svg>`;
+  } else if (direction === 'falling') {
+    return `<svg class="w-full h-10 overflow-visible" viewBox="0 0 160 40" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="grad-falling-${uniqueId}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#10b981" stop-opacity="0.4"/>
+          <stop offset="100%" stop-color="#10b981" stop-opacity="0.0"/>
+        </linearGradient>
+      </defs>
+      <path d="M0,8 Q30,12 60,10 T120,28 T160,35 L160,40 L0,40 Z" fill="url(#grad-falling-${uniqueId})"/>
+      <path d="M0,8 Q30,12 60,10 T120,28 T160,35" fill="none" stroke="#10b981" stroke-width="2.5"/>
+    </svg>`;
+  } else {
+    return `<svg class="w-full h-10 overflow-visible" viewBox="0 0 160 40" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="grad-flat-${uniqueId}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#94a3b8" stop-opacity="0.3"/>
+          <stop offset="100%" stop-color="#94a3b8" stop-opacity="0.0"/>
+        </linearGradient>
+      </defs>
+      <path d="M0,20 Q40,16 80,22 T160,20 L160,40 L0,40 Z" fill="url(#grad-flat-${uniqueId})"/>
+      <path d="M0,20 Q40,16 80,22 T160,20" fill="none" stroke="#94a3b8" stroke-width="2.5"/>
+    </svg>`;
+  }
+}
+
 async function loadPredict() {
   const r = await api('/predict');
   const body = $('#predictBody');
   body.innerHTML = '';
-  const header = el('div', { class: 'mb-4 flex items-center justify-between gap-3' }, [
-    el('div', { class: 'text-sm text-slate-400' },
-      `Comparing ${r.window_current[0]} → ${r.window_current[1]} against prior 30 days`),
+
+  // Top Header & Filters Bar
+  const header = el('div', { class: 'mb-6 flex flex-col gap-4' });
+
+  const topRow = el('div', { class: 'flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-ink-600 pb-4' }, [
+    el('div', {}, [
+      el('h2', { class: 'text-xl font-black text-slate-100 uppercase tracking-wide' }, 'PREDICTIONS & OPERATIONAL PLANNING'),
+      el('p', { class: 'text-xs text-slate-400 mt-1 font-medium' }, `Comparing ${r.window_current?.[0] || '2026-06-01'} → ${r.window_current?.[1] || '2026-07-01'} against prior 30 days`),
+    ]),
+    el('div', { class: 'flex flex-wrap items-center gap-2' }, [
+      el('div', { class: 'flex items-center gap-1.5 bg-ink-900 border border-ink-600 rounded-lg px-2.5 py-1.5 text-xs' }, [
+        el('span', { class: 'text-slate-400 text-[11px] font-bold' }, 'District'),
+        el('select', { id: 'predDistrictFilter', class: 'bg-ink-900 text-slate-200 outline-none text-xs cursor-pointer border-none' }, [
+          el('option', { value: '', class: 'bg-ink-900 text-slate-200' }, '(All)'),
+          el('option', { value: 'Bengaluru Urban', class: 'bg-ink-900 text-slate-200' }, 'Bengaluru Urban'),
+          el('option', { value: 'Mysuru', class: 'bg-ink-900 text-slate-200' }, 'Mysuru'),
+          el('option', { value: 'Mangaluru', class: 'bg-ink-900 text-slate-200' }, 'Mangaluru'),
+          el('option', { value: 'Belagavi', class: 'bg-ink-900 text-slate-200' }, 'Belagavi'),
+          el('option', { value: 'Ballari', class: 'bg-ink-900 text-slate-200' }, 'Ballari'),
+        ]),
+      ]),
+      el('div', { class: 'flex items-center gap-1.5 bg-ink-900 border border-ink-600 rounded-lg px-2.5 py-1.5 text-xs' }, [
+        el('span', { class: 'text-slate-400 text-[11px] font-bold' }, 'Crime Category'),
+        el('select', { id: 'predCategoryFilter', class: 'bg-ink-900 text-slate-200 outline-none text-xs cursor-pointer border-none' }, [
+          el('option', { value: '', class: 'bg-ink-900 text-slate-200' }, '(All)'),
+          el('option', { value: 'Cyber Crimes', class: 'bg-ink-900 text-slate-200' }, 'Cyber Crimes'),
+          el('option', { value: 'House Burglary', class: 'bg-ink-900 text-slate-200' }, 'House Burglary'),
+          el('option', { value: 'Hurt / Assault', class: 'bg-ink-900 text-slate-200' }, 'Hurt / Assault'),
+          el('option', { value: 'Vehicle Theft', class: 'bg-ink-900 text-slate-200' }, 'Vehicle Theft'),
+        ]),
+      ]),
+    ])
   ]);
-  // Weekly report: SP's Monday-morning brief (admin / dysp only).
+
   if (['admin', 'dysp'].includes(state.session?.role)) {
-    const btn = el('button', {
-      class: 'px-3 py-1.5 rounded bg-ink-700 border border-ink-600 hover:bg-ink-600 text-sm shrink-0',
-    }, '📄 Weekly report');
-    btn.addEventListener('click', () => downloadWeeklyReport(btn));
-    header.appendChild(btn);
+    const weeklyBtn = el('button', {
+      class: 'px-3.5 py-1.5 rounded-lg bg-ink-800 hover:bg-ink-700 border border-ink-600 text-slate-200 text-xs font-semibold shrink-0 ml-auto shadow-sm transition',
+    }, '📄 Weekly Report');
+    weeklyBtn.addEventListener('click', () => downloadWeeklyReport(weeklyBtn));
+    topRow.querySelector('.flex.flex-wrap').appendChild(weeklyBtn);
   }
+
+  header.appendChild(topRow);
   body.appendChild(header);
-  if (!r.warnings.length) {
-    body.appendChild(el('div', { class: 'text-emerald-400 mb-6' },
-      'No unusual spikes detected.'));
-  } else {
-    const list = el('div', { class: 'space-y-3 mb-8' });
-    for (const w of r.warnings) {
-      list.appendChild(el('div', { class: 'hotspot-card flex items-start justify-between gap-3' }, [
-        el('div', {}, [
-          el('div', { class: 'font-semibold' }, `${w.district} · ${w.category}`),
-          el('div', { class: 'text-sm text-slate-300 mt-1' }, w.message),
-        ]),
-        el('div', { class: 'flex items-center gap-2' }, [
-          el('div', { class: `badge ${w.severity}` }, w.severity),
-          feedbackButtons(`warning:${w.district}|${w.category}`),
-        ]),
-      ]));
-    }
-    body.appendChild(list);
-  }
 
-  // --- Forward-looking forecast (next 30 days) ---
-  const fc = r.forecast;
-  if (fc?.forecast?.length) {
-    body.appendChild(el('h3', {
-      class: 'text-xs uppercase tracking-wider text-slate-400 mb-1',
-    }, 'Forecast — next 30 days'));
-    body.appendChild(el('p', { class: 'text-[11px] text-slate-500 mb-3' },
-      fc.model));
-    const arrows = { rising: '▲', falling: '▼', flat: '→' };
-    const colors = { rising: 'text-red-400', falling: 'text-emerald-400',
-                     flat: 'text-slate-400' };
-    const grid = el('div', {
-      class: 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3',
+  // SECTION 1: EARLY WARNING ALERTS
+  const sec1 = el('div', { class: 'mb-8 bg-ink-900 border border-ink-600 rounded-xl p-5 shadow-lg' }, [
+    el('div', { class: 'border-b border-ink-600 pb-3 mb-4 flex justify-between items-center' }, [
+      el('div', {}, [
+        el('h3', { class: 'text-xs font-bold uppercase tracking-widest text-slate-200' }, 'EARLY WARNING ALERTS'),
+        el('p', { class: 'text-[11px] text-slate-400 mt-0.5 font-medium' }, 'SPIKE DETECTION (CURRENT 30-DAY vs PRIOR 30-DAY WINDOW)'),
+      ]),
+      el('span', { class: 'text-slate-500 text-xs' }, '⋮')
+    ])
+  ]);
+
+  const warningsContainer = el('div', { id: 'warningsContainer', class: 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4' });
+
+  const renderWarningsList = (filterDist = '', filterCat = '') => {
+    warningsContainer.innerHTML = '';
+    let filtered = r.warnings || [];
+    if (filterDist) filtered = filtered.filter(w => w.district.includes(filterDist));
+    if (filterCat) filtered = filtered.filter(w => w.category.includes(filterCat));
+
+    if (!filtered.length) {
+      warningsContainer.innerHTML = `<div class="col-span-3 text-center py-6 text-slate-500 italic text-xs">No active spike warnings for the selected filters.</div>`;
+      return;
+    }
+
+    filtered.forEach(w => {
+      let sevTag = 'MEDIUM';
+      let borderCss = 'border-l-4 border-l-yellow-500 bg-ink-850 border-ink-600';
+      let badgeCss = 'bg-yellow-500/20 border border-yellow-500/40 text-yellow-400';
+
+      if (w.severity === 'spike' || (w.change_pct && w.change_pct >= 100)) {
+        sevTag = 'CRITICAL';
+        borderCss = 'border-l-4 border-l-rose-500 bg-ink-850 border-ink-600';
+        badgeCss = 'bg-rose-500/20 border border-rose-500/40 text-rose-400';
+      } else if (w.severity === 'elevated' || (w.change_pct && w.change_pct >= 50)) {
+        sevTag = 'HIGH';
+        borderCss = 'border-l-4 border-l-amber-500 bg-ink-850 border-ink-600';
+        badgeCss = 'bg-amber-500/20 border border-amber-500/40 text-amber-400';
+      }
+
+      const card = el('div', { class: `p-4 rounded-xl border ${borderCss} flex flex-col justify-between shadow-md hover:border-slate-500 transition` }, [
+        el('div', {}, [
+          el('div', { class: 'flex items-center justify-between gap-2 mb-2' }, [
+            el('span', { class: 'font-bold text-sm text-slate-100' }, `${w.district} · ${w.category}`),
+            el('span', { class: `px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${badgeCss}` }, sevTag),
+          ]),
+          el('p', { class: 'text-xs text-slate-300 leading-relaxed font-medium' },
+            w.change_pct ? `${w.change_pct}% Spike in cases detected. ${w.message}` : w.message
+          ),
+        ])
+      ]);
+      warningsContainer.appendChild(card);
     });
-    for (const f of fc.forecast) {
-      grid.appendChild(el('div', { class: 'hotspot-card flex items-center justify-between gap-3' }, [
-        el('div', {}, [
-          el('div', { class: 'font-semibold text-sm' }, `${f.district}`),
-          el('div', { class: 'text-xs text-slate-400' }, f.category),
-        ]),
-        el('div', { class: 'text-right' }, [
-          el('div', { class: `font-bold ${colors[f.direction]}` },
-            `${arrows[f.direction]} ${f.predicted_next_30d}`),
-          el('div', { class: 'text-[10px] text-slate-500' },
-            `last 30d: ${f.last_30d}`),
-        ]),
-      ]));
-    }
-    body.appendChild(grid);
-  }
+  };
 
-  // --- Patrol recommendations: hotspot × time-of-day, the actionable half ---
+  renderWarningsList();
+  sec1.appendChild(warningsContainer);
+  body.appendChild(sec1);
+
+  // SECTION 2: FORECAST — NEXT 30 DAYS
+  const fc = r.forecast;
+  const sec2 = el('div', { class: 'mb-8 bg-ink-900 border border-ink-600 rounded-xl p-5 shadow-lg' }, [
+    el('div', { class: 'border-b border-ink-600 pb-3 mb-4 flex justify-between items-center' }, [
+      el('div', {}, [
+        el('h3', { class: 'text-xs font-bold uppercase tracking-widest text-slate-200' }, 'FORECAST — NEXT 30 DAYS'),
+        el('p', { class: 'text-[11px] text-slate-400 mt-0.5 font-medium' }, 'NEXT 30-DAY CRIME VOLUME PREDICTIONS'),
+      ]),
+      el('span', { class: 'text-slate-500 text-xs' }, '⋮')
+    ])
+  ]);
+
+  const forecastContainer = el('div', { id: 'forecastContainer', class: 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4' });
+
+  const renderForecastList = (filterDist = '', filterCat = '') => {
+    forecastContainer.innerHTML = '';
+    let list = fc?.forecast || [];
+    if (filterDist) list = list.filter(f => f.district.includes(filterDist));
+    if (filterCat) list = list.filter(f => f.category.includes(filterCat));
+
+    if (!list.length) {
+      forecastContainer.innerHTML = `<div class="col-span-3 text-center py-6 text-slate-500 italic text-xs">No forecast data for the selected filters.</div>`;
+      return;
+    }
+
+    list.forEach(f => {
+      const isRising = f.direction === 'rising';
+      const isFalling = f.direction === 'falling';
+
+      let dirBadgeClass = 'bg-slate-700/50 text-slate-300 border-slate-600';
+      let dirSymbol = '→ FLAT';
+      if (isRising) {
+        dirBadgeClass = 'bg-rose-500/20 text-rose-400 border-rose-500/30';
+        dirSymbol = '▲ RISING';
+      } else if (isFalling) {
+        dirBadgeClass = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
+        dirSymbol = '▼ FALLING';
+      }
+
+      const pctChange = f.last_30d ? Math.round(((f.predicted_next_30d - f.last_30d) / f.last_30d) * 100) : 0;
+      const pctStr = pctChange >= 0 ? `+${pctChange}%` : `${pctChange}%`;
+
+      const card = el('div', { class: 'bg-ink-850 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-md hover:border-slate-500 transition' });
+      card.innerHTML = `
+        <div>
+          <div class="flex items-center justify-between gap-2 mb-2">
+            <span class="font-bold text-xs text-slate-200 truncate">${f.district} · ${f.category}</span>
+            <span class="px-2 py-0.5 rounded text-[10px] font-black border ${dirBadgeClass}">${dirSymbol}</span>
+          </div>
+          <div class="flex items-end justify-between gap-3 mt-1">
+            <div>
+              <span class="text-[11px] text-slate-400 block font-medium">Predicted Count: <strong class="text-xl text-slate-100 font-extrabold ml-1">${f.predicted_next_30d}</strong></span>
+              <div class="text-[11px] font-bold mt-1 ${isRising ? 'text-rose-400' : isFalling ? 'text-emerald-400' : 'text-slate-400'}">${pctStr} vs Last 30 Days</div>
+            </div>
+            <div class="w-28 h-10 shrink-0">
+              ${generateSparklineSvg(f.direction)}
+            </div>
+          </div>
+        </div>
+      `;
+      forecastContainer.appendChild(card);
+    });
+  };
+
+  renderForecastList();
+  sec2.appendChild(forecastContainer);
+  body.appendChild(sec2);
+
+  // SECTION 3: RECOMMENDED PATROL WINDOWS
   try {
     const p = await api('/patrol');
     if (p.recommendations?.length) {
-      body.appendChild(el('h3', {
-        class: 'text-xs uppercase tracking-wider text-slate-400 mt-8 mb-1',
-      }, 'Recommended patrol windows'));
-      body.appendChild(el('p', { class: 'text-[11px] text-slate-500 mb-3' },
-        `Station × 4-hour window with the highest incident concentration, last ${p.window_days} days.`));
-      const grid2 = el('div', {
-        class: 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3',
-      });
-      for (const rec of p.recommendations) {
-        grid2.appendChild(el('div', { class: 'hotspot-card flex items-center justify-between gap-3' }, [
+      const sec3 = el('div', { class: 'bg-ink-900 border border-ink-600 rounded-xl p-5 shadow-lg' }, [
+        el('div', { class: 'border-b border-ink-600 pb-3 mb-4 flex justify-between items-center' }, [
           el('div', {}, [
-            el('div', { class: 'font-semibold text-sm' }, rec.station),
-            el('div', { class: 'text-xs text-slate-400' }, tVal(rec.district)),
+            el('h3', { class: 'text-xs font-bold uppercase tracking-widest text-slate-200' }, 'RECOMMENDED PATROL WINDOWS'),
           ]),
-          el('div', { class: 'text-right' }, [
-            el('div', { class: 'font-bold text-khaki-500' }, rec.window),
-            el('div', { class: 'text-[10px] text-slate-500' },
-              `${rec.crimes} incidents · ${rec.heinous} heinous`),
-          ]),
-        ]));
-      }
-      body.appendChild(grid2);
+          el('span', { class: 'text-slate-500 text-xs' }, '⋮')
+        ])
+      ]);
+
+      const patrolContainer = el('div', { id: 'patrolContainer', class: 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4' });
+
+      const renderPatrolList = (filterDist = '') => {
+        patrolContainer.innerHTML = '';
+        let list = p.recommendations || [];
+        if (filterDist) list = list.filter(rec => (rec.district || '').includes(filterDist) || (rec.station || '').includes(filterDist));
+
+        if (!list.length) {
+          patrolContainer.innerHTML = `<div class="col-span-3 text-center py-6 text-slate-500 italic text-xs">No patrol recommendations for the selected filter.</div>`;
+          return;
+        }
+
+        list.forEach(rec => {
+          const card = el('div', { class: 'bg-ink-850 border border-ink-600 rounded-xl p-4 flex items-center justify-between shadow-md hover:border-slate-500 transition' }, [
+            el('div', { class: 'truncate pr-2' }, [
+              el('h4', { class: 'font-bold text-sm text-slate-100 truncate' }, rec.station),
+              el('div', { class: 'text-xs text-slate-400 mt-0.5 truncate' }, tVal(rec.district)),
+            ]),
+            el('div', { class: 'text-right shrink-0' }, [
+              el('div', { class: 'font-bold text-base text-amber-400 tracking-wide font-mono' }, rec.window),
+              el('div', { class: 'text-[11px] text-slate-400 mt-0.5 font-medium' },
+                `${rec.crimes} incidents · ${rec.heinous} heinous`
+              )
+            ])
+          ]);
+          patrolContainer.appendChild(card);
+        });
+      };
+
+      renderPatrolList();
+      sec3.appendChild(patrolContainer);
+      body.appendChild(sec3);
+
+      // Connect Header Filter Listeners
+      const applyFilter = () => {
+        const dVal = $('#predDistrictFilter')?.value || '';
+        const cVal = $('#predCategoryFilter')?.value || '';
+        renderWarningsList(dVal, cVal);
+        renderForecastList(dVal, cVal);
+        renderPatrolList(dVal);
+      };
+
+      $('#predDistrictFilter')?.addEventListener('change', applyFilter);
+      $('#predCategoryFilter')?.addEventListener('change', applyFilter);
     }
   } catch {}
 }
@@ -2380,6 +2684,31 @@ function exportPDFClient() {
   pdf.save(`ksp-crime-ai-${now.replace(/[: ]/g, '-')}.pdf`);
 }
 
+// Notification loader
+async function loadNotifications() {
+  try {
+    const data = await api('/predict');
+    const warnings = data.warnings || [];
+    const list = document.getElementById('notificationList');
+    const badge = document.getElementById('notificationBadge');
+    if (!list) return;
+    if (!warnings.length) {
+      list.innerHTML = '<div class="p-3 text-slate-500 italic text-center">No active spike warnings.</div>';
+      if (badge) badge.classList.add('hidden');
+      return;
+    }
+    if (badge) badge.classList.remove('hidden');
+    list.innerHTML = warnings.map(w => `
+      <div class="p-2 rounded bg-ink-900 border border-ink-600 hover:border-accent transition cursor-pointer" onclick="showView('predict')">
+        <div class="font-bold text-amber-400 text-[11px]">${w.category || 'Warning'} · ${w.district || 'Statewide'}</div>
+        <div class="text-[10px] text-slate-300 mt-0.5">${w.message || ''}</div>
+      </div>
+    `).join('');
+  } catch (e) {
+    console.error('Failed to load notifications:', e);
+  }
+}
+
 // ---------------------------------------------------------------- boot
 document.addEventListener('DOMContentLoaded', async () => {
   setupVoice();
@@ -2459,30 +2788,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     clearSession(); location.reload();
   });
 
-  // Notification loader
-  async function loadNotifications() {
-    try {
-      const data = await api('/predict');
-      const warnings = data.warnings || [];
-      const list = document.getElementById('notificationList');
-      const badge = document.getElementById('notificationBadge');
-      if (!list) return;
-      if (!warnings.length) {
-        list.innerHTML = '<div class="p-3 text-slate-500 italic text-center">No active spike warnings.</div>';
-        if (badge) badge.classList.add('hidden');
-        return;
-      }
-      if (badge) badge.classList.remove('hidden');
-      list.innerHTML = warnings.map(w => `
-        <div class="p-2 rounded bg-ink-900 border border-ink-600 hover:border-accent transition cursor-pointer" onclick="showView('predict')">
-          <div class="font-bold text-amber-400 text-[11px]">${w.category || 'Warning'} · ${w.district || 'Statewide'}</div>
-          <div class="text-[10px] text-slate-300 mt-0.5">${w.message || ''}</div>
-        </div>
-      `).join('');
-    } catch (e) {
-      console.error('Failed to load notifications:', e);
-    }
-  }
+  // Notification loader is globally defined above
 
   // Header search bar → navigate to Cases and search
   const headerSearch = document.getElementById('headerSearchInput');

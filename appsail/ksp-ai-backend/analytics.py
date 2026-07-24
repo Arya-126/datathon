@@ -85,12 +85,18 @@ def hotspots(*, level: str = "district", limit: int = 15,
         elif severity.lower() in ("medium", "low"):
             filter_sql += " AND c.GravityOffenceID = 2"
 
-    # 3. Patrol Priority Filter (maps to GravityOffenceID as Heinous is Urgent)
+    # 3. Patrol Priority Filter — independent of severity.
+    #    Uses CaseStatusID (case progress) so combinations like
+    #    "High severity + Low patrol" (heinous but closed) work.
+    #    Urgent = Under Investigation (1), Medium = Charge Sheeted (2),
+    #    Low = Closed (3) or Referred/Zero FIR (4).
     if patrol_priority:
         if patrol_priority.lower() == "urgent":
-            filter_sql += " AND c.GravityOffenceID = 1"
-        elif patrol_priority.lower() in ("medium", "low"):
-            filter_sql += " AND c.GravityOffenceID = 2"
+            filter_sql += " AND c.CaseStatusID = 1"
+        elif patrol_priority.lower() == "medium":
+            filter_sql += " AND c.CaseStatusID = 2"
+        elif patrol_priority.lower() == "low":
+            filter_sql += " AND c.CaseStatusID IN (3, 4)"
 
     if level == "station":
         with cursor() as conn:
@@ -123,12 +129,13 @@ def hotspots(*, level: str = "district", limit: int = 15,
                 bd_rows = conn.execute(
                     f"""
                     SELECT c.PoliceStationID AS unit_id,
-                           ch.CrimeGroupName AS category,
+                           csh.CrimeHeadName AS category,
                            COUNT(*) AS cnt
                     FROM CaseMaster c
-                    JOIN CrimeHead ch ON ch.CrimeHeadID = c.CrimeMajorHeadID
+                    JOIN CrimeSubHead csh ON csh.CrimeSubHeadID = c.CrimeMinorHeadID
                     WHERE c.PoliceStationID IN ({placeholders}) AND c.CrimeRegisteredDate >= ? {sc_sql} {filter_sql}
-                    GROUP BY c.PoliceStationID, ch.CrimeGroupName
+                    GROUP BY c.PoliceStationID, csh.CrimeHeadName
+                    ORDER BY cnt DESC
                     """,
                     (*unit_ids, since, *sc_params, *filter_params),
                 ).fetchall()
@@ -188,6 +195,33 @@ def hotspots(*, level: str = "district", limit: int = 15,
             (since, *sc_params, *filter_params, limit),
         ).fetchall()
         result = [dict(r) for r in rows]
+
+        # Crime breakdown per district (real data, not hardcoded)
+        district_ids = [r["district_id"] for r in result]
+        if district_ids:
+            placeholders = ",".join(["?"] * len(district_ids))
+            bd_rows = conn.execute(
+                f"""
+                SELECT d.DistrictID AS district_id,
+                       csh.CrimeHeadName AS category,
+                       COUNT(*) AS cnt
+                FROM CaseMaster c
+                JOIN Unit u ON u.UnitID = c.PoliceStationID
+                JOIN District d ON d.DistrictID = u.DistrictID
+                JOIN CrimeSubHead csh ON csh.CrimeSubHeadID = c.CrimeMinorHeadID
+                WHERE d.DistrictID IN ({placeholders})
+                      AND c.CrimeRegisteredDate >= ? {sc_sql} {filter_sql}
+                GROUP BY d.DistrictID, csh.CrimeHeadName
+                ORDER BY cnt DESC
+                """,
+                (*district_ids, since, *sc_params, *filter_params),
+            ).fetchall()
+            breakdowns = defaultdict(dict)
+            for br in bd_rows:
+                breakdowns[br["district_id"]][br["category"]] = br["cnt"]
+            for r in result:
+                r["crime_breakdown"] = breakdowns.get(r["district_id"], {})
+
         for r in result:
             intensity = min(10.0, round(r["crimes"] * 0.4 + (r.get("heinous") or 0) * 0.8, 1))
             r["intensity"] = intensity

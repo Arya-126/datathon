@@ -15,6 +15,12 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <link rel="stylesheet" href="/static/styles.css" />
+<style>
+  select option {
+    background-color: #18202c !important;
+    color: #e2e8f0 !important;
+  }
+</style>
 <script>
 tailwind.config = {
   theme: {
@@ -80,12 +86,24 @@ tailwind.config = {
       <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Investigating Officer</label>
       <select id="loginEmployee" class="w-full mb-4 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 outline-none"></select>
     </div>
-    <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Demo Password <span class="normal-case text-slate-500">(only if configured)</span></label>
-    <input id="loginPassword" type="password" class="w-full mb-4 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 focus:border-accent outline-none" placeholder="leave blank if none" />
+    <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Password</label>
+    <div class="relative mb-2">
+      <input id="loginPassword" type="password" class="w-full px-3 py-2 pr-10 rounded-lg bg-ink-900 border border-ink-600 focus:border-accent outline-none text-slate-100" placeholder="Enter password" />
+      <button type="button" id="togglePasswordBtn" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 focus:outline-none transition p-1" title="Show/Hide password">
+        <svg id="eyeIconShow" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+        </svg>
+        <svg id="eyeIconHide" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858-5.908a10.025 10.025 0 013.682-.792c4.478 0 8.268 2.943 9.542 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21M3 3l18 18"></path>
+        </svg>
+      </button>
+    </div>
+    <div id="loginErrorMsg" class="hidden text-xs text-rose-400 mb-3 font-medium bg-rose-950/40 border border-rose-800/50 rounded-lg px-3 py-2 flex items-center gap-1.5">
+      <span>⚠️</span> <span id="loginErrorText"></span>
+    </div>
     <button id="loginBtn" class="w-full mt-2 bg-accent hover:bg-blue-500 text-white font-medium py-2.5 rounded-lg transition">Enter</button>
-    <p class="text-[11px] text-slate-500 mt-4 leading-relaxed">
-      Role-based access is enforced in the query layer. Every action is written to an audit trail. Analyst sessions cannot project PII columns; IO sessions only see their own cases.
-    </p>
+    
   </div>
 </div>
 
@@ -232,8 +250,22 @@ tailwind.config = {
             </div>
           </div>
 
-          <!-- Bottom Grid: DYNAMIC RESPONSE CARDS + PROMPT SUGGESTIONS -->
-          <div class="grid grid-cols-[1.6fr_1fr] gap-6 shrink-0">
+          <!-- Suggested Prompts Line -->
+          <div class="flex items-center gap-3 overflow-x-auto pb-1 shrink-0 scrollbar-thin">
+            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-wider whitespace-nowrap">Suggested Prompts:</span>
+            <button class="prompt-suggestion-btn whitespace-nowrap px-3.5 py-1.5 rounded-full bg-ink-900 hover:bg-ink-800 border border-ink-600 text-[11px] text-slate-300 transition hover:text-white shadow-sm font-medium">
+              Which districts had the most cyber crime?
+            </button>
+            <button class="prompt-suggestion-btn whitespace-nowrap px-3.5 py-1.5 rounded-full bg-ink-900 hover:bg-ink-800 border border-ink-600 text-[11px] text-slate-300 transition hover:text-white shadow-sm font-medium">
+              The top police stations by robbery detection rate are
+            </button>
+            <button class="prompt-suggestion-btn whitespace-nowrap px-3.5 py-1.5 rounded-full bg-ink-900 hover:bg-ink-800 border border-ink-600 text-[11px] text-slate-300 transition hover:text-white shadow-sm font-medium">
+              Show repeat offenders in Mangaluru
+            </button>
+          </div>
+
+          <!-- Full Width Dynamic Response Cards -->
+          <div class="w-full shrink-0">
             <!-- Dynamic Response Cards -->
             <div class="bg-ink-900 border border-ink-600 rounded-xl p-5 flex flex-col space-y-3 min-h-[360px]">
               <div class="text-[11px] font-bold uppercase tracking-widest text-slate-400 border-b border-ink-600 pb-2">Dynamic Response Cards</div>
@@ -241,25 +273,6 @@ tailwind.config = {
                 <div class="col-span-2 flex flex-col items-center justify-center text-center py-8 text-slate-500 italic text-xs">
                   <span>Submit a query to view dynamic charts and result tables here.</span>
                 </div>
-              </div>
-            </div>
-
-            <!-- Prompt Suggestions -->
-            <div class="bg-ink-900 border border-ink-600 rounded-xl p-5 flex flex-col space-y-3 min-h-[360px]">
-              <div class="text-[11px] font-bold uppercase tracking-widest text-slate-400 border-b border-ink-600 pb-2">Prompt Suggestions</div>
-              <div class="flex flex-col gap-2.5">
-                <button class="prompt-suggestion-btn text-left px-3.5 py-2.5 rounded-lg bg-ink-800 hover:bg-ink-700 border border-ink-600 text-xs text-slate-300 transition leading-snug truncate shadow-sm">
-                  Which districts had the most cyber crime?
-                </button>
-                <button class="prompt-suggestion-btn text-left px-3.5 py-2.5 rounded-lg bg-ink-800 hover:bg-ink-700 border border-ink-600 text-xs text-slate-300 transition leading-snug truncate shadow-sm">
-                  Show monthly trend of crimes against women in Bengaluru Urban
-                </button>
-                <button class="prompt-suggestion-btn text-left px-3.5 py-2.5 rounded-lg bg-ink-800 hover:bg-ink-700 border border-ink-600 text-xs text-slate-300 transition leading-snug truncate shadow-sm">
-                  List top P.S. by robbery detection rate
-                </button>
-                <button class="prompt-suggestion-btn text-left px-3.5 py-2.5 rounded-lg bg-ink-800 hover:bg-ink-700 border border-ink-600 text-xs text-slate-300 transition leading-snug truncate shadow-sm">
-                  Show repeat offenders in Mangaluru
-                </button>
               </div>
             </div>
           </div>
@@ -334,7 +347,6 @@ tailwind.config = {
             </div>
             <div class="flex items-center gap-3">
               <span id="caseHeadStatus" class="px-3 py-1 rounded bg-amber-500/10 text-amber-500 border border-amber-500/20 text-xs font-bold shadow-sm">Investigation In-Progress</span>
-              <button id="caseHeaderDownloadBtn" class="px-3 py-1.5 rounded bg-ink-700 hover:bg-ink-600 border border-ink-600 text-xs text-slate-300 font-bold transition">Download</button>
             </div>
           </div>
 
