@@ -252,11 +252,17 @@ async function api(path, opts = {}) {
   if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
   const res = await fetch(API_BASE + path, { ...opts, headers });
   if (!res.ok) {
+    if (res.status === 401 && path !== '/login') {
+      clearSession();
+      state.token = null;
+      $('#login')?.classList.remove('hidden');
+    }
     const body = await res.text();
     throw new Error(`${res.status}: ${body}`);
   }
   return res.json();
 }
+
 
 function el(tag, attrs = {}, children = []) {
   const e = document.createElement(tag);
@@ -510,16 +516,36 @@ function updateDynamicCards(r) {
   if (!container) return;
   container.innerHTML = '';
   
-  if (!r.rows || !r.rows.length) {
+  if (!r || !r.rows || !r.rows.length) {
+    const hasSQL = r && r.sql;
+    const scopeInfo = state.session?.district || state.session?.unit || '';
+    container.innerHTML = hasSQL
+      ? `<div class="col-span-2 bg-ink-800 border border-ink-600 rounded-xl p-5 flex flex-col items-center justify-center text-center gap-3">
+           <div class="text-slate-400 text-xs font-semibold">Query returned 0 rows</div>
+           <div class="text-slate-500 text-[10px] max-w-sm leading-relaxed">
+             ${scopeInfo ? `Your data scope is limited to <span class="text-accent font-bold">${scopeInfo}</span>. ` : ''}
+             The SQL executed successfully but no matching records were found. Try broadening your query or asking about a different crime type.
+           </div>
+           ${hasSQL ? `<pre class="text-[9px] text-slate-600 bg-ink-900 rounded p-2 max-w-full overflow-x-auto mt-1 border border-ink-700">${r.sql.slice(0, 200)}${r.sql.length > 200 ? '…' : ''}</pre>` : ''}
+         </div>`
+      : `<div class="col-span-2 flex flex-col items-center justify-center text-center py-10 text-slate-500 italic text-xs">
+           <span>No active data results to display. Try asking for counts, trends, or hotspots.</span>
+         </div>`;
+    return;
+  }
+
+
+  const columns = r.columns && r.columns.length ? r.columns : Object.keys(r.rows[0] || {});
+  if (!columns.length) {
     container.innerHTML = `
       <div class="col-span-2 flex flex-col items-center justify-center text-center py-10 text-slate-500 italic text-xs">
-        <span>No active data results to display. Try asking for counts, trends, or hotspots.</span>
+        <span>No columns in data response.</span>
       </div>
     `;
     return;
   }
   
-  const hasChart = r.chart_hint === 'bar' || r.chart_hint === 'line';
+  const hasChart = (r.chart_hint === 'bar' || r.chart_hint === 'line' || r.chart_hint === 'pie') && r.rows.length > 0 && columns.length >= 2;
   
   // 1. Create Table Card
   const tableCard = el('div', { class: `bg-ink-800 border border-ink-600 rounded-xl p-4 flex flex-col h-[280px] overflow-hidden ${hasChart ? '' : 'col-span-2'}` });
@@ -529,17 +555,17 @@ function updateDynamicCards(r) {
   ]));
   
   const tableWrapper = el('div', { class: 'flex-grow overflow-auto text-xs' });
-  tableWrapper.appendChild(renderTable(r.columns, r.rows));
+  tableWrapper.appendChild(renderTable(columns, r.rows));
   tableCard.appendChild(tableWrapper);
   
   // 2. Create Chart Card if applicable
   if (hasChart) {
-    const labelCol = r.columns[0];
-    const valCol = r.columns[r.columns.length - 1];
+    const labelCol = columns[0];
+    const valCol = columns[columns.length - 1];
 
     const chartCard = el('div', { class: 'bg-ink-800 border border-ink-600 rounded-xl p-4 flex flex-col h-[280px] overflow-hidden' });
     chartCard.appendChild(el('div', { class: 'text-xs font-semibold text-slate-300 mb-2 border-b border-ink-600 pb-1.5 flex justify-between items-center shrink-0' }, [
-      el('span', {}, r.chart_hint === 'line' ? 'Monthly Trend' : 'District Breakdown'),
+      el('span', {}, r.chart_hint === 'line' ? 'Monthly Trend' : 'Breakdown'),
       el('button', { class: 'text-[10px] text-slate-500 hover:text-slate-300' }, '⋮')
     ]));
     
@@ -567,7 +593,7 @@ function updateDynamicCards(r) {
     chartContent.append(chartContainer, tableContainer);
     chartCard.appendChild(chartContent);
     
-    // Add actions under the chart card like in the reference image
+    // Add actions under the chart card
     const actions = el('div', { class: 'flex justify-between mt-2 pt-2 border-t border-ink-600/40 shrink-0' });
     const btnClass = 'px-3 py-1 rounded bg-ink-700 hover:bg-ink-600 text-[10px] text-slate-200 border border-ink-600 transition font-semibold shadow-sm';
     
@@ -595,38 +621,41 @@ function updateDynamicCards(r) {
     // Render chart card on the left, table on the right
     container.append(chartCard, tableCard);
     
-    // Initialize Chart.js
+    // Initialize Chart.js safely
     setTimeout(() => {
-      const label = r.columns[0];
-      const value = r.columns[r.columns.length - 1];
-      new Chart(canvas, {
-        type: r.chart_hint,
-        data: {
-          labels: r.rows.map(row => row[label]),
-          datasets: [{
-            label: value,
-            data: r.rows.map(row => row[value]),
-            backgroundColor: '#5b8def',
-            borderColor: '#93c5fd',
-            fill: true,
-            tension: 0.3
-          }],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: { legend: { display: false } },
-          scales: {
-            x: { ticks: { color: '#94a3b8', font: { size: 8 } }, grid: { color: '#1b2230' } },
-            y: { ticks: { color: '#94a3b8', font: { size: 8 } }, grid: { color: '#1b2230' } },
+      try {
+        new Chart(canvas, {
+          type: r.chart_hint === 'line' ? 'line' : 'bar',
+          data: {
+            labels: r.rows.map(row => String(tVal(row[labelCol]) ?? '')),
+            datasets: [{
+              label: valCol,
+              data: r.rows.map(row => Number(row[valCol]) || 0),
+              backgroundColor: '#5b8def',
+              borderColor: '#93c5fd',
+              fill: true,
+              tension: 0.3
+            }],
           },
-        },
-      });
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: '#94a3b8', font: { size: 8 } }, grid: { color: '#1b2230' } },
+              y: { ticks: { color: '#94a3b8', font: { size: 8 } }, grid: { color: '#1b2230' } },
+            },
+          },
+        });
+      } catch (e) {
+        console.error('Chart error:', e);
+      }
     }, 0);
   } else {
     container.appendChild(tableCard);
   }
 }
+
 
 const QUERY_TRANSLATIONS = {
   "show monthly trend of crimes against women in bengaluru city for last 6 months.": "ಕಳೆದ 6 ತಿಂಗಳಲ್ಲಿ ಬೆಂಗಳೂರು ನಗರದಲ್ಲಿ ಮಹಿಳೆಯರ ವಿರುದ್ಧದ ಅಪರಾಧಗಳ ಮಾಸಿಕ ಪ್ರವೃತ್ತಿಯನ್ನು ತೋರಿಸಿ.",
@@ -678,41 +707,53 @@ function addMessage(role, opts) {
       chatLog.appendChild(wrap2);
     }
   } else {
-    // Bot message
+    // Bot message — show primary language first based on detected language
     const enText = opts.prefix_en || opts.prefix || '';
     const knText = opts.prefix_kn || '';
+    const detectedLang = opts.detectedLang || 'en';
+    const isKnPrimary = detectedLang === 'kn';
 
-    // 1. English bot bubble (left-aligned, with avatar)
-    if (enText) {
+    // Determine primary/secondary text based on detected language
+    const primaryText = isKnPrimary ? (knText || enText) : enText;
+    const secondaryText = isKnPrimary ? enText : knText;
+    const primaryClass = isKnPrimary ? kannadaBubbleClass : englishBubbleClass;
+    const secondaryClass = isKnPrimary ? englishBubbleClass : kannadaBubbleClass;
+    const primaryLabel = isKnPrimary ? '(ಕನ್ನಡ)' : '(English)';
+    const secondaryLabel = isKnPrimary ? '(English)' : '(Kannada)';
+    const primarySpeakTitle = isKnPrimary ? 'ಓದಿ' : 'Speak English';
+    const secondarySpeakTitle = isKnPrimary ? 'Speak English' : 'ಓದಿ';
+
+    // 1. Primary bot bubble (left-aligned, with avatar)
+    if (primaryText) {
       const wrap1 = el('div', { class: 'flex w-full mb-3 items-start justify-start' });
       const avatar = el('div', { class: botAvatarClass }, 'AI');
-      const bubble1 = el('div', { class: englishBubbleClass }, enText);
-      const label1 = el('span', { class: 'text-[9px] text-slate-500 ml-2 mt-3.5 shrink-0 select-none' }, '(English)');
+      const bubble1 = el('div', { class: primaryClass }, primaryText);
+      const label1 = el('span', { class: 'text-[9px] text-slate-500 ml-2 mt-3.5 shrink-0 select-none' }, primaryLabel);
       
       // Speak button under bot bubble
       const speakBtn = el('button', {
-        class: 'mt-2 block px-2 py-0.5 rounded bg-ink-700 hover:bg-ink-600 border border-ink-600 text-[10px] text-slate-300 transition font-semibold',
-        title: 'Speak English'
+        class: 'mt-2 block px-2 py-0.5 rounded bg-ink-700 hover:bg-ink-600 border border-ink-600 text-[10px] text-slate-300 transition font-semibold' + (isKnPrimary ? ' kn' : ''),
+        title: primarySpeakTitle
       }, '🔊 Speak');
-      speakBtn.addEventListener('click', () => speak(enText));
+      speakBtn.addEventListener('click', () => speak(primaryText));
       bubble1.appendChild(speakBtn);
 
       wrap1.append(avatar, bubble1, label1);
       chatLog.appendChild(wrap1);
     }
 
-    // 2. Kannada bot bubble (right-aligned, no avatar)
-    if (knText) {
+    // 2. Secondary bot bubble (right-aligned, no avatar)
+    if (secondaryText && secondaryText !== primaryText) {
       const wrap2 = el('div', { class: 'flex w-full mb-3 items-start justify-end pr-2' });
-      const label2 = el('span', { class: 'text-[9px] text-slate-500 mr-2 mt-3.5 shrink-0 select-none' }, '(Kannada)');
-      const bubble2 = el('div', { class: kannadaBubbleClass }, knText);
+      const label2 = el('span', { class: 'text-[9px] text-slate-500 mr-2 mt-3.5 shrink-0 select-none' }, secondaryLabel);
+      const bubble2 = el('div', { class: secondaryClass }, secondaryText);
       
       // Speak button under bot bubble
       const speakBtn = el('button', {
-        class: 'mt-2 block px-2 py-0.5 rounded bg-ink-750 hover:bg-ink-700 border border-teal-800/40 text-[10px] text-slate-300 transition font-semibold kn',
-        title: 'ಓದಿ'
+        class: 'mt-2 block px-2 py-0.5 rounded bg-ink-750 hover:bg-ink-700 border border-teal-800/40 text-[10px] text-slate-300 transition font-semibold' + (isKnPrimary ? '' : ' kn'),
+        title: secondarySpeakTitle
       }, '🔊 Speak');
-      speakBtn.addEventListener('click', () => speak(knText));
+      speakBtn.addEventListener('click', () => speak(secondaryText));
       bubble2.appendChild(speakBtn);
 
       wrap2.append(label2, bubble2);
@@ -851,17 +892,42 @@ async function sendChat() {
       state.conversationId = r.conversation_id;
       persistSession();
     }
+
+    // Build prefix with result count
+    let prefixEn = r.answer_prefix_en || '';
+    let prefixKn = r.answer_prefix_kn || '';
+    const rowCount = (r.rows && r.rows.length) || 0;
+    if (r.sql && rowCount > 0) {
+      prefixEn += ` (${rowCount} result${rowCount !== 1 ? 's' : ''})`;
+      if (prefixKn) prefixKn += ` (${rowCount} ಫಲಿತಾಂಶ${rowCount !== 1 ? 'ಗಳು' : ''})`;
+    } else if (r.sql && rowCount === 0) {
+      prefixEn += ' (0 results — your scope may restrict visible data)';
+      if (prefixKn) prefixKn += ' (0 ಫಲಿತಾಂಶ — ನಿಮ್ಮ ವ್ಯಾಪ್ತಿ ಮಿತಿ)';
+    }
     
     addMessage('bot', {
-      prefix_en: r.answer_prefix_en,
-      prefix_kn: r.answer_prefix_kn,
+      prefix_en: prefixEn,
+      prefix_kn: prefixKn,
+      detectedLang: r.language || 'en',
     });
+
+    // Render inline table in chat if we have rows
+    if (rowCount > 0) {
+      const columns = r.columns && r.columns.length ? r.columns : Object.keys(r.rows[0] || {});
+      const inlineWrap = el('div', { class: 'flex w-full mb-3 items-start justify-start pl-11' });
+      const inlineCard = el('div', { class: 'bg-ink-800 border border-ink-600 rounded-xl p-3 max-w-[90%] overflow-auto text-xs max-h-[200px]' });
+      inlineCard.appendChild(renderTable(columns, r.rows));
+      inlineWrap.appendChild(inlineCard);
+      $('#chatLog').appendChild(inlineWrap);
+      $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
+    }
     
     // Update the bottom panel dynamic cards with result
     updateDynamicCards(r);
     
-    const prefix = state.lang === 'kn' && r.answer_prefix_kn
-      ? r.answer_prefix_kn : r.answer_prefix_en;
+    const isKnResponse = (r.language || 'en') === 'kn';
+    const prefix = isKnResponse && prefixKn
+      ? prefixKn : prefixEn;
       
     state.history.push({
       role: 'assistant',
@@ -878,6 +944,7 @@ async function sendChat() {
     addMessage('bot', { prefix: `Error: ${e.message}` });
   }
 }
+
 
 // ---------------------------------------------------------------- voice
 // Two paths, picked at click time:
@@ -985,6 +1052,22 @@ async function speakViaServer(text, lang) {
     return true;
   } catch { return false; }
 }
+
+function speak(text, lang) {
+  if (!state.ttsEnabled || !text) return;
+  if (!lang) {
+    lang = /[\u0C80-\u0CFF]/.test(text) ? 'kn' : 'en';
+  }
+  speakViaServer(text, lang).then((played) => {
+    if (played) return;
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang === 'kn' ? 'kn-IN' : 'en-IN';
+    window.speechSynthesis.speak(u);
+  });
+}
+
 
 // ---------------------------------------------------------------- hotspots
 let hotspotMap = null;

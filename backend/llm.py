@@ -125,16 +125,38 @@ Rules:
 2. SQL MUST be a single SELECT (no INSERT/UPDATE/DELETE/DDL, no ';').
 3. Always add LIMIT 200 unless the question is an aggregate.
 3b. District.DistrictName values are EXACTLY these 15 — always map
-    colloquial/anglicized names to them before filtering:
+    colloquial/anglicized/Kannada names to them before filtering:
       Bengaluru Urban, Bengaluru Rural, Mysuru, Mangaluru,
       Hubballi-Dharwad, Belagavi, Kalaburagi, Ballari, Vijayapura,
       Shivamogga, Tumakuru, Davanagere, Udupi, Chitradurga, Raichur
-    Mappings: Bangalore/Bengaluru → 'Bengaluru Urban' (add 'Bengaluru
-    Rural' too if the user means the metro region); Mysore → Mysuru;
-    Mangalore → Mangaluru; Hubli/Dharwad → Hubballi-Dharwad;
-    Gulbarga → Kalaburagi; Bellary → Ballari; Bijapur → Vijayapura;
-    Shimoga → Shivamogga; Tumkur → Tumakuru; Belgaum → Belagavi.
+    Mappings:
+      Bangalore/Bengaluru/ಬೆಂಗಳೂರು → 'Bengaluru Urban' (add 'Bengaluru Rural' too if metro);
+      Mysore/Mysuru/ಮೈಸೂರು → Mysuru;
+      Mangalore/Mangaluru/ಮಂಗಳೂರು → Mangaluru;
+      Hubli/Dharwad/Hubballi/ಹುಬ್ಬಳ್ಳಿ/ಧಾರವಾಡ → Hubballi-Dharwad;
+      Gulbarga/Kalaburagi/ಕಲಬುರಗಿ → Kalaburagi;
+      Bellary/Ballari/ಬಳ್ಳಾರಿ → Ballari;
+      Bijapur/Vijayapura/ವಿಜಯಪುರ → Vijayapura;
+      Shimoga/Shivamogga/ಶಿವಮೊಗ್ಗ → Shivamogga;
+      Tumkur/Tumakuru/ತುಮಕೂರು → Tumakuru;
+      Belgaum/Belagavi/ಬೆಳಗಾವಿ → Belagavi;
+      Udupi/ಉಡುಪಿ → Udupi; Chitradurga/ಚಿತ್ರದುರ್ಗ → Chitradurga; Raichur/ರಾಯಚೂರು → Raichur.
     Never emit a district literal outside this list.
+3c. Kannada Queries & Vocabulary Mapping:
+    - User questions may be written in Kannada script (e.g. 'ಬೆಂಗಳೂರಿನಲ್ಲಿ ಎಷ್ಟು ಕೊಲೆ ಪ್ರಕರಣಗಳು?', 'ಯಾವ ಜಿಲ್ಲೆಯಲ್ಲಿ ಅತಿ ಹೆಚ್ಚು ಅಪರಾಧಗಳಿವೆ?', 'ಸೈಬರ್ ಅಪರಾಧಗಳ ಪಟ್ಟಿ').
+    - Translate Kannada terms to schema entities:
+      കൊലെ / ಕೊಲೆ / ಹತ್ಯೆ → Murder / IPC 302
+      ಸೈಬರ್ / ಆನ್‌ಲೈನ್ → Cyber Crimes
+      ಕಳ್ಳತನ / ದರೋಡೆ / ಮನೆ ಕಳ್ಳತನ → Theft / Robbery / Burglary
+      ಅಪರಾಧಗಳು / ಪ್ರಕರಣಗಳು / ಎಫ್‌ಐಆರ್ → Cases / CaseMaster
+      ಠಾಣೆ / ಪೋಲೀಸ್ ಠಾಣೆ / ಪ್ರದೇಶ → Unit (Police Station)
+      ಜಿಲ್ಲೆ / ಜಿಲ್ಲೆಗಳು → District
+      ಪುನರಾವರ್ತಿತ ಅಪರಾಧಿ → Repeat offenders (PersonAlias)
+      ಮಾದಕ ವಸ್ತು / ಗಾಂಜಾ → NDPS
+      ಮಹಿಳೆ / ವರದಕ್ಷಿಣೆ / ಅತ್ಯಾಚಾರ → Crimes against women
+    - Set "language": "kn" whenever the input query is in Kannada.
+    - ALWAYS populate both explanation_kn and answer_prefix_kn in fluent, natural Kannada.
+
 4. Never SELECT columns from ComplainantDetails, Victim, or Accused unless
    the query is an aggregate (COUNT/GROUP BY). Row-level projections of
    caste_master_name / ReligionName / OccupationName are forbidden — those
@@ -718,6 +740,11 @@ def _fallback(query: str) -> LLMResult:
                "ಇತ್ತೀಚಿನ ಎಫ್‌ಐಆರ್‌ಗಳು:")
 
 
+def clear_cooldowns() -> None:
+    """Clear all provider cooldowns so fresh API requests are attempted."""
+    _COOLDOWN.clear()
+
+
 # ---------------------------------------------------------------- entry point
 def nl_to_sql(query: str, history: list[ChatTurn] | None = None,
               capp=None) -> LLMResult:
@@ -728,12 +755,13 @@ def nl_to_sql(query: str, history: list[ChatTurn] | None = None,
     failures, short for rate limits) so the next key/provider is tried
     immediately and quota exhaustion degrades seamlessly.
     """
+    is_kn = any("\u0c80" <= c <= "\u0cff" for c in query)
     messages = _messages_from_history(query, history)
 
     # 1. Catalyst QuickML (LLM serving)
     try:
         data = catalyst.quickml_generate(SYSTEM_PROMPT, messages, capp=capp)
-        r = _result_from_json(data)
+        r = _result_from_json(data, is_kn)
         r.provider = "quickml"
         return r
     except Exception:  # noqa: BLE001
@@ -748,7 +776,7 @@ def nl_to_sql(query: str, history: list[ChatTurn] | None = None,
         try:
             text = _CALLERS[p["kind"]](p, SYSTEM_PROMPT, messages)
             data = _extract_json(text)
-            r = _result_from_json(data)
+            r = _result_from_json(data, is_kn)
             r.raw = text
             r.provider = p["id"]
             return r
@@ -757,8 +785,8 @@ def nl_to_sql(query: str, history: list[ChatTurn] | None = None,
             code = getattr(getattr(e, "response", None), "status_code", None)
             if code == 429:          # rate limit / quota — brief cooldown
                 cooldown = 120
-            elif code in (401, 403):  # bad/revoked key — long cooldown
-                cooldown = 3600
+            elif code in (401, 403):  # bad/revoked key — 5m cooldown
+                cooldown = 300
             else:                     # transient / parse error
                 cooldown = 30
             _COOLDOWN[p["id"]] = now + cooldown
@@ -783,9 +811,10 @@ def _messages_from_history(query: str,
     return msgs
 
 
-def _result_from_json(data: dict) -> LLMResult:
+def _result_from_json(data: dict, is_kn: bool = False) -> LLMResult:
+    lang = "kn" if is_kn else data.get("language", "en")
     return LLMResult(
-        language=data.get("language", "en"),
+        language=lang,
         sql=data.get("sql", "").strip().rstrip(";"),
         explanation_en=data.get("explanation_en", ""),
         explanation_kn=data.get("explanation_kn", ""),
@@ -793,3 +822,4 @@ def _result_from_json(data: dict) -> LLMResult:
         answer_prefix_en=data.get("answer_prefix_en", ""),
         answer_prefix_kn=data.get("answer_prefix_kn", ""),
     )
+
