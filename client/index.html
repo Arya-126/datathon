@@ -51,7 +51,8 @@
     #sidebarOverlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 39; }
     #sidebarOverlay.open { display: block; }
     #view-chat { grid-template-columns: 1fr !important; }
-    #view-chat > div:last-child { display: none; }
+    #chatHistorySidebar { display: none !important; }
+    #view-chat > aside { display: none !important; }
   }
   @media (max-width: 768px) {
     header { flex-wrap: wrap; gap: 8px; }
@@ -70,6 +71,10 @@
   body.light-theme .text-slate-400,
   body.light-theme .text-slate-500 { color: #64748b !important; }
   body.light-theme select option { background-color: #ffffff !important; color: #1e293b !important; }
+  body.light-theme .hotspot-card { background: #ffffff !important; border-color: #cbd5e1 !important; }
+  body.light-theme table.data th { background: #e2e8f0 !important; color: #475569 !important; }
+  body.light-theme table.data td { border-bottom-color: #cbd5e1 !important; }
+  body.light-theme table.data tbody tr:hover { background: #f1f5f9 !important; }
   body.light-theme .skeleton {
     background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
     background-size: 200% 100%;
@@ -215,8 +220,6 @@ tailwind.config = {
 
     <!-- Sidebar footer (signed in block) -->
     <div class="p-4 border-t border-ink-600 flex flex-col gap-2">
-      <div class="text-[10px] text-slate-400 font-bold uppercase tracking-wider" data-i18n="sidebar.signedInAs">Signed in as</div>
-      <div id="sessLabel" class="text-xs font-semibold text-slate-300 truncate">—</div>
       <button id="logoutBtn" class="text-[10px] text-left font-bold text-accent hover:text-blue-400 transition" data-i18n="sidebar.signOut">Sign out ↗</button>
     </div>
   </aside>
@@ -224,21 +227,9 @@ tailwind.config = {
   <!-- main content area -->
   <main class="flex-1 overflow-hidden flex flex-col">
     <!-- Top Header -->
-    <header class="flex items-center justify-between px-6 py-3 border-b border-ink-600 bg-ink-900 shadow-sm">
+    <header class="flex items-center justify-between px-6 py-4 border-b border-ink-600 bg-ink-900 shadow-sm">
       <!-- Brand & Search -->
       <div class="flex items-center gap-6 flex-1">
-        <!-- Logo -->
-        <div class="flex items-center gap-2 shrink-0">
-          <img src="./logo.jpg" class="w-6 h-6 rounded-full border border-kspGold/30 object-cover" alt="KSP Logo" />
-          <span class="text-base font-extrabold text-slate-100 tracking-wider">AVALOKANA</span>
-        </div>
-        <!-- Search bar -->
-        <div class="hidden md:flex items-center flex-1 max-w-sm">
-          <div class="relative w-full">
-            <input type="text" placeholder="Search suspects, cases, locations..." class="w-full bg-ink-950 border border-ink-600 rounded-lg px-3.5 py-1.5 pl-8 text-xs text-slate-300 outline-none focus:border-accent transition" />
-            <span class="absolute left-3 top-2 text-[10px] text-slate-500">🔍</span>
-          </div>
-        </div>
       </div>
 
       <!-- User Controls & Language Toggle -->
@@ -288,8 +279,13 @@ tailwind.config = {
               <h2 id="viewTitle" class="text-lg font-bold text-slate-100 tracking-wide">Conversational AI Intelligence</h2>
               <p id="viewSubtitle" class="text-xs text-slate-400 mt-0.5">Ask in English or Kannada. Voice is supported.</p>
             </div>
-            <div class="px-3 py-1.5 rounded-lg bg-ink-900 border border-ink-600 text-[10px] font-bold text-slate-300">
-              DISTRICT SCOPE: <span id="sessDistrictScope" class="text-accent font-bold">Statewide</span>
+            <div class="flex items-center gap-2">
+              <button id="headerExportPdfBtn" class="px-3 py-1.5 rounded-lg bg-accent hover:bg-blue-600 text-white border border-accent hover:border-blue-600 text-[10px] font-bold flex items-center gap-1 transition">
+                <span>📥 Export PDF</span>
+              </button>
+              <button id="historyDropdownBtn" class="px-3 py-1.5 rounded-lg bg-ink-900 hover:bg-ink-800 border border-ink-600 text-[10px] font-bold text-slate-300 flex items-center gap-1.5 transition">
+                <span>📜 History</span> <span class="text-[8px]">▼</span>
+              </button>
             </div>
           </div>
 
@@ -356,26 +352,35 @@ tailwind.config = {
         </aside>
       </section>
 
-      <!-- VIEW: CASES -->
-      <section id="view-cases" class="view hidden flex-grow h-full overflow-hidden grid grid-cols-[1fr_350px] bg-ink-950">
+      <section id="view-cases" class="view hidden flex-grow h-full overflow-hidden bg-ink-950 relative">
         
-        <!-- Left Side: Filters + Details + Tabbed Panel -->
-        <div class="flex flex-col overflow-y-auto p-6 space-y-6 flex-grow bg-ink-950">
-          
+        <!-- Subview A: Landing View (Full Screen Cases List) -->
+        <div id="caseLandingView" class="flex flex-col h-full overflow-hidden p-6 space-y-4 w-full">
+          <!-- Header title and description -->
+          <div class="flex justify-between items-center shrink-0">
+            <div>
+              <h2 class="text-lg font-bold text-slate-100 tracking-wide">Cases Database</h2>
+              <p class="text-xs text-slate-400 mt-0.5">Browse, search, and analyze law enforcement case files.</p>
+              <p class="text-[10px] text-slate-500 mt-0.5 italic">Click on any case for detailed information.</p>
+            </div>
+          </div>
+
           <!-- Search & Filters Bar -->
           <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-wrap gap-3 items-end shadow-sm shrink-0 text-slate-200">
             <div class="flex gap-2">
               <div class="flex flex-col gap-1 w-16">
                 <label class="text-[9px] uppercase font-bold text-slate-400">Prefix</label>
-                <input id="caseFilterPrefix" type="text" class="px-2.5 py-1.5 rounded bg-ink-700 border border-ink-600 outline-none text-xs text-slate-200" value="KA" />
+                <input id="caseFilterPrefix" type="text" class="px-2.5 py-1.5 rounded bg-ink-700 border border-ink-600 outline-none text-xs text-slate-200" placeholder="KA" />
               </div>
               <div class="flex flex-col gap-1 w-20">
                 <label class="text-[9px] uppercase font-bold text-slate-400">Year</label>
-                <input id="caseFilterYear" type="text" class="px-2.5 py-1.5 rounded bg-ink-700 border border-ink-600 outline-none text-xs text-slate-200" value="2024" />
+                <input id="caseFilterYear" type="text" class="px-2.5 py-1.5 rounded bg-ink-700 border border-ink-600 outline-none text-xs text-slate-200" placeholder="2024" />
               </div>
-              <div class="flex flex-col gap-1 w-28">
+              <div class="flex flex-col gap-1 w-32">
                 <label class="text-[9px] uppercase font-bold text-slate-400">P.S.</label>
-                <input id="caseFilterPs" type="text" class="px-2.5 py-1.5 rounded bg-ink-700 border border-ink-600 outline-none text-xs text-slate-200" placeholder="BLR/VDS" />
+                <select id="caseFilterPs" class="px-2.5 py-1.5 rounded bg-ink-700 border border-ink-600 outline-none text-xs text-slate-200 cursor-pointer">
+                  <option value="">All Stations</option>
+                </select>
               </div>
               <div class="flex flex-col gap-1 w-20">
                 <label class="text-[9px] uppercase font-bold text-slate-400">Sequence</label>
@@ -400,177 +405,237 @@ tailwind.config = {
             </div>
           </div>
 
-          <!-- FIR Details Header Bar -->
-          <div class="bg-ink-900 border border-ink-600 rounded-xl p-5 shadow-sm shrink-0 flex justify-between items-center">
-            <div class="space-y-1">
-              <div class="text-[9px] font-bold text-accent uppercase tracking-wider">FIR Details</div>
-              <h3 id="caseHeadCrimeNo" class="text-xl font-black text-slate-100 tracking-tight">—</h3>
-              <p class="text-xs text-slate-400 flex gap-4">
-                <span>District: <strong id="caseHeadDistrict" class="text-slate-300">—</strong></span>
-                <span>Station: <strong id="caseHeadStation" class="text-slate-300">—</strong></span>
-                <span>Incident Date: <strong id="caseHeadIncidentDate" class="text-slate-300">—</strong></span>
-              </p>
-            </div>
-            <div class="flex items-center gap-3">
-              <span id="caseHeadStatus" class="px-3 py-1 rounded bg-amber-500/10 text-amber-500 border border-amber-500/20 text-xs font-bold shadow-sm">Investigation In-Progress</span>
-            </div>
+          <!-- Table Container -->
+          <div class="flex-grow overflow-auto bg-ink-900 border border-ink-600 rounded-xl shadow-sm">
+            <table class="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr class="border-b border-ink-600 bg-ink-800 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  <th class="p-4 w-[180px]">FIR Number</th>
+                  <th class="p-4 w-[200px]">Station</th>
+                  <th class="p-4 w-[150px]">District</th>
+                  <th class="p-4">Brief Summary</th>
+                </tr>
+              </thead>
+              <tbody id="caseLandingTableBody" class="divide-y divide-ink-600/40 text-slate-200">
+                <!-- Dynamically populated rows -->
+              </tbody>
+            </table>
           </div>
 
-          <!-- KPI Cards (6 columns) -->
-          <div class="grid grid-cols-6 gap-4 shrink-0">
-            <!-- Crime Details Card -->
-            <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
-              <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Crime Details</span>
-              <div class="text-xs font-extrabold text-slate-200 mt-2">IPC Sections</div>
-              <div id="caseKpiSections" class="text-sm font-black text-accent truncate">—</div>
-            </div>
-
-            <!-- Complainant Summary Card -->
-            <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
-              <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Complainant</span>
-              <div id="caseKpiComplainant" class="text-xs font-extrabold text-slate-200 truncate mt-2">—</div>
-              <div id="caseKpiComplainantContact" class="text-[10px] text-slate-500 truncate">+91 —</div>
-            </div>
-
-            <!-- Accused Summary Card -->
-            <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
-              <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Accused</span>
-              <div id="caseKpiAccusedCount" class="text-xs font-extrabold text-slate-200 mt-2">—</div>
-              <div id="caseKpiAccusedName" class="text-[10px] text-slate-500 truncate">—</div>
-            </div>
-
-            <!-- I.O. Details Card -->
-            <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
-              <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Investigating Officer</span>
-              <div id="caseKpiIoName" class="text-xs font-extrabold text-slate-200 truncate mt-2">—</div>
-              <div id="caseKpiIoRank" class="text-[10px] text-slate-500 truncate">—</div>
-            </div>
-
-            <!-- Arrest Status Card -->
-            <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
-              <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Arrest Status</span>
-              <div id="caseKpiArrestStatus" class="text-xs font-extrabold text-emerald-400 mt-2">—</div>
-              <div id="caseKpiArrestsPending" class="text-[10px] text-slate-500 truncate">—</div>
-            </div>
-
-            <!-- Chargesheet Status Card -->
-            <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
-              <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Chargesheet Status</span>
-              <div id="caseKpiCsStatus" class="text-xs font-extrabold text-amber-500 mt-2">—</div>
-              <div id="caseKpiCsDeadline" class="text-[10px] text-slate-500 truncate">—</div>
+          <!-- Pagination Footer -->
+          <div class="flex justify-between items-center shrink-0 pt-2 text-xs">
+            <span id="casePaginationInfo" class="text-slate-400">Page 1 of 1 (Total: 0 cases)</span>
+            <div class="flex gap-2">
+              <button id="casePrevPageBtn" class="px-3 py-1.5 rounded bg-ink-800 border border-ink-600 text-slate-300 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition font-semibold">Previous</button>
+              <button id="caseNextPageBtn" class="px-3 py-1.5 rounded bg-ink-800 border border-ink-600 text-slate-300 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition font-semibold">Next</button>
             </div>
           </div>
-
-          <!-- Bottom Tabbed Section -->
-          <div class="grid grid-cols-[300px_1fr] gap-6 items-stretch flex-grow min-h-[350px]">
-            <!-- Left: visual timeline -->
-            <div class="bg-ink-900 border border-ink-600 rounded-xl p-5 flex flex-col shadow-sm">
-              <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b border-ink-600 pb-2 mb-4 shrink-0">Visual Timeline</span>
-              <div id="caseTimelineList" class="flex-grow overflow-y-auto space-y-5 pr-1 relative pl-4 border-l border-ink-600/60 mt-1">
-                <!-- Timeline items will be rendered here dynamically -->
-              </div>
-            </div>
-
-            <!-- Right: Tabbed panel -->
-            <div class="bg-ink-900 border border-ink-600 rounded-xl p-5 flex flex-col shadow-sm">
-              <!-- Tabs bar -->
-              <div class="flex gap-4 border-b border-ink-600 pb-2 mb-4 shrink-0 text-xs font-bold">
-                <button data-tab="persons" class="case-tab active text-slate-300 hover:text-white px-1.5 py-1 border-b-2 border-transparent transition">Persons</button>
-                <button data-tab="evidence" class="case-tab text-slate-300 hover:text-white px-1.5 py-1 border-b-2 border-transparent transition">Related Evidence</button>
-                <button data-tab="linked" class="case-tab text-slate-300 hover:text-white px-1.5 py-1 border-b-2 border-transparent transition">Linked Cases</button>
-                <button data-tab="audit" class="case-tab text-slate-300 hover:text-white px-1.5 py-1 border-b-2 border-transparent transition">Audit Access History</button>
-              </div>
-
-              <!-- Tab contents -->
-              <div class="flex-grow overflow-auto min-h-0 text-xs">
-                
-                <!-- Persons Tab Content -->
-                <div id="caseTabContent-persons" class="case-tab-content space-y-4">
-                  <table class="w-full text-slate-300 text-left border-collapse">
-                    <thead>
-                      <tr class="border-b border-ink-600 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                        <th class="pb-2">Name</th>
-                        <th class="pb-2">Role</th>
-                        <th class="pb-2">Contact Details</th>
-                        <th class="pb-2">Demographics</th>
-                      </tr>
-                    </thead>
-                    <tbody id="caseTabTable-persons">
-                      <!-- Rows populated dynamically -->
-                    </tbody>
-                  </table>
-                </div>
-
-                <!-- Related Evidence Tab Content -->
-                <div id="caseTabContent-evidence" class="case-tab-content hidden space-y-4">
-                  <div class="text-slate-400 italic text-center py-10">No specific physical evidence catalogued. Reference Brief Facts for modus clues.</div>
-                </div>
-
-                <!-- Linked Cases Tab Content -->
-                <div id="caseTabContent-linked" class="case-tab-content hidden space-y-4">
-                  <div id="caseTabContent-linkedList" class="space-y-3">
-                    <!-- Linked case cards -->
-                  </div>
-                </div>
-
-                <!-- Audit History Tab Content -->
-                <div id="caseTabContent-audit" class="case-tab-content hidden space-y-4">
-                  <table class="w-full text-slate-300 text-left border-collapse">
-                    <thead>
-                      <tr class="border-b border-ink-600 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                        <th class="pb-2">Timestamp</th>
-                        <th class="pb-2">User</th>
-                        <th class="pb-2">Action</th>
-                        <th class="pb-2">Summary</th>
-                      </tr>
-                    </thead>
-                    <tbody id="caseTabTable-audit">
-                      <!-- Rows populated dynamically -->
-                    </tbody>
-                  </table>
-                </div>
-
-              </div>
-            </div>
-          </div>
-
         </div>
 
-        <!-- Right Side: AI Case summary & quick actions -->
-        <aside class="border-l border-ink-600 bg-ink-900 overflow-y-auto p-5 flex flex-col space-y-5 h-full">
-          <h3 class="text-xs font-bold uppercase tracking-widest text-slate-400 border-b border-ink-600 pb-2">
-            AI Case Summary
-          </h3>
-          <div class="bg-ink-800 border border-ink-600 rounded-xl p-4 shadow-sm text-xs leading-relaxed text-slate-200">
-            <p id="caseAiSummaryText">Loading summary...</p>
+        <!-- Subview B: Detailed Case Card View (Floating Modal Card) -->
+        <div id="caseDetailView" class="hidden absolute inset-0 z-50 bg-slate-950/80 backdrop-blur-xs p-6 flex justify-center items-center">
+          <div class="bg-ink-900 border border-ink-600 rounded-2xl w-full h-full max-w-7xl overflow-hidden grid grid-cols-[1fr_350px] shadow-2xl relative animate-in fade-in zoom-in-95 duration-200">
+            <!-- Left Side of Details: Back button + Details + Tabbed Panel -->
+            <div class="flex flex-col overflow-y-auto p-6 space-y-6 flex-grow bg-ink-900">
+            <!-- Back Button -->
+            <div class="shrink-0">
+              <button id="caseBackBtn" class="px-3.5 py-1.5 rounded-lg bg-ink-800 hover:bg-ink-700 border border-ink-600 text-xs font-bold text-slate-300 hover:text-white flex items-center gap-1.5 transition">
+                <span>←</span> Back to Cases Database
+              </button>
+            </div>
+
+            <!-- FIR Details Header Bar -->
+            <div class="bg-ink-900 border border-ink-600 rounded-xl p-5 shadow-sm shrink-0 flex justify-between items-center">
+              <div class="space-y-1">
+                <div class="text-[9px] font-bold text-accent uppercase tracking-wider">FIR Details</div>
+                <h3 id="caseHeadCrimeNo" class="text-xl font-black text-slate-100 tracking-tight">—</h3>
+                <p class="text-xs text-slate-400 flex gap-4">
+                  <span>District: <strong id="caseHeadDistrict" class="text-slate-300">—</strong></span>
+                  <span>Station: <strong id="caseHeadStation" class="text-slate-300">—</strong></span>
+                  <span>Incident Date: <strong id="caseHeadIncidentDate" class="text-slate-300">—</strong></span>
+                </p>
+              </div>
+              <div class="flex items-center gap-3">
+                <span id="caseHeadStatus" class="px-3 py-1 rounded bg-amber-500/10 text-amber-500 border border-amber-500/20 text-xs font-bold shadow-sm">Investigation In-Progress</span>
+              </div>
+            </div>
+
+            <!-- KPI Cards (6 columns) -->
+            <div class="grid grid-cols-6 gap-4 shrink-0">
+              <!-- Crime Details Card -->
+              <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
+                <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Crime Details</span>
+                <div class="text-xs font-extrabold text-slate-200 mt-2">IPC Sections</div>
+                <div id="caseKpiSections" class="text-sm font-black text-accent truncate">—</div>
+              </div>
+
+              <!-- Complainant Summary Card -->
+              <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
+                <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Complainant</span>
+                <div id="caseKpiComplainant" class="text-xs font-extrabold text-slate-200 truncate mt-2">—</div>
+                <div id="caseKpiComplainantContact" class="text-[10px] text-slate-500 truncate">+91 —</div>
+              </div>
+
+              <!-- Accused Summary Card -->
+              <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
+                <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Accused</span>
+                <div id="caseKpiAccusedCount" class="text-xs font-extrabold text-slate-200 mt-2">—</div>
+                <div id="caseKpiAccusedName" class="text-[10px] text-slate-500 truncate">—</div>
+              </div>
+
+              <!-- I.O. Details Card -->
+              <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
+                <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Investigating Officer</span>
+                <div id="caseKpiIoName" class="text-xs font-extrabold text-slate-200 truncate mt-2">—</div>
+                <div id="caseKpiIoRank" class="text-[10px] text-slate-500 truncate">—</div>
+              </div>
+
+              <!-- Arrest Status Card -->
+              <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
+                <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Arrest Status</span>
+                <div id="caseKpiArrestStatus" class="text-xs font-extrabold text-emerald-400 mt-2">—</div>
+                <div id="caseKpiArrestsPending" class="text-[10px] text-slate-500 truncate">—</div>
+              </div>
+
+              <!-- Chargesheet Status Card -->
+              <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
+                <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Chargesheet Status</span>
+                <div id="caseKpiCsStatus" class="text-xs font-extrabold text-amber-500 mt-2">—</div>
+                <div id="caseKpiCsDeadline" class="text-[10px] text-slate-500 truncate">—</div>
+              </div>
+            </div>
+
+            <!-- Bottom Tabbed Section -->
+            <div class="grid grid-cols-[300px_1fr] gap-6 items-stretch flex-grow min-h-[350px]">
+              <!-- Left: visual timeline -->
+              <div class="bg-ink-900 border border-ink-600 rounded-xl p-5 flex flex-col shadow-sm">
+                <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b border-ink-600 pb-2 mb-4 shrink-0">Visual Timeline</span>
+                <div id="caseTimelineList" class="flex-grow overflow-y-auto space-y-5 pr-1 relative pl-4 border-l border-ink-600/60 mt-1">
+                  <!-- Timeline items will be rendered here dynamically -->
+                </div>
+              </div>
+
+              <!-- Right: Tabbed panel -->
+              <div class="bg-ink-900 border border-ink-600 rounded-xl p-5 flex flex-col shadow-sm">
+                <!-- Tabs bar -->
+                <div class="flex gap-4 border-b border-ink-600 pb-2 mb-4 shrink-0 text-xs font-bold">
+                  <button data-tab="persons" class="case-tab active text-slate-300 hover:text-white px-1.5 py-1 border-b-2 border-transparent transition">Persons</button>
+                  <button data-tab="evidence" class="case-tab text-slate-300 hover:text-white px-1.5 py-1 border-b-2 border-transparent transition">Related Evidence</button>
+                  <button data-tab="linked" class="case-tab text-slate-300 hover:text-white px-1.5 py-1 border-b-2 border-transparent transition">Linked Cases</button>
+                  <button data-tab="audit" class="case-tab text-slate-300 hover:text-white px-1.5 py-1 border-b-2 border-transparent transition">Audit Access History</button>
+                </div>
+
+                <!-- Tab contents -->
+                <div class="flex-grow overflow-auto min-h-0 text-xs">
+                  
+                  <!-- Persons Tab Content -->
+                  <div id="caseTabContent-persons" class="case-tab-content space-y-4">
+                    <table class="w-full text-slate-300 text-left border-collapse">
+                      <thead>
+                        <tr class="border-b border-ink-600 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                          <th class="pb-2">Name</th>
+                          <th class="pb-2">Role</th>
+                          <th class="pb-2">Contact Details</th>
+                          <th class="pb-2">Demographics</th>
+                        </tr>
+                      </thead>
+                      <tbody id="caseTabTable-persons">
+                        <!-- Rows populated dynamically -->
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <!-- Related Evidence Tab Content -->
+                  <div id="caseTabContent-evidence" class="case-tab-content hidden space-y-4">
+                    <table class="w-full text-slate-300 text-left border-collapse">
+                      <thead>
+                        <tr class="border-b border-ink-600 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                          <th class="pb-2">Evidence ID</th>
+                          <th class="pb-2">Type</th>
+                          <th class="pb-2">Source</th>
+                          <th class="pb-2">Description</th>
+                        </tr>
+                      </thead>
+                      <tbody id="caseTabTable-evidence">
+                        <!-- Rows populated dynamically -->
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <!-- Linked Cases Tab Content -->
+                  <div id="caseTabContent-linked" class="case-tab-content hidden space-y-4">
+                    <table class="w-full text-slate-300 text-left border-collapse">
+                      <thead>
+                        <tr class="border-b border-ink-600 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                          <th class="pb-2">Case Number</th>
+                          <th class="pb-2">Details</th>
+                          <th class="pb-2">Status</th>
+                          <th class="pb-2">Match Strength</th>
+                        </tr>
+                      </thead>
+                      <tbody id="caseTabTable-linked">
+                        <!-- Rows populated dynamically -->
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <!-- Audit History Tab Content -->
+                  <div id="caseTabContent-audit" class="case-tab-content hidden space-y-4">
+                    <table class="w-full text-slate-300 text-left border-collapse">
+                      <thead>
+                        <tr class="border-b border-ink-600 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                          <th class="pb-2">Timestamp</th>
+                          <th class="pb-2">User</th>
+                          <th class="pb-2">Action</th>
+                          <th class="pb-2">Summary</th>
+                        </tr>
+                      </thead>
+                      <tbody id="caseTabTable-audit">
+                        <!-- Rows populated dynamically -->
+                      </tbody>
+                    </table>
+                  </div>
+
+                </div>
+              </div>
+            </div>
+
           </div>
 
-          <h3 class="text-xs font-bold uppercase tracking-widest text-slate-400 border-b border-ink-600 pb-1.5 pt-2">
-            Quick Actions
-          </h3>
-          <div class="flex flex-col gap-3">
-            <button id="caseActionFindLinked" class="w-full py-2.5 px-4 rounded-xl bg-accent hover:bg-blue-500 text-white font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm">
-              <span>🔍</span> Find Linked FIRs
-            </button>
-            <button id="caseActionViewNetwork" class="w-full py-2.5 px-4 rounded-xl bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-200 font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm">
-              <span>🔗</span> View Network
-            </button>
-            <button id="caseActionTimeline" class="w-full py-2.5 px-4 rounded-xl bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-200 font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm">
-              <span>📅</span> Show Timeline
-            </button>
-            <button id="caseActionExportPdf" class="w-full py-2.5 px-4 rounded-xl bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-200 font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm">
-              <span>📥</span> Export PDF
-            </button>
-            <button id="caseActionCollab" class="w-full py-2.5 px-4 rounded-xl bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-200 font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm" onclick="alert('Collaboration request dispatched to Inspector.')">
-              <span>👥</span> Request Collaboration
-            </button>
-            <button id="caseActionAlert" class="w-full py-2.5 px-4 rounded-xl bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-200 font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm" onclick="alert('Alert set for case status changes.')">
-              <span>🔔</span> Set Alert
-            </button>
-          </div>
-        </aside>
+          <!-- Right Side: AI Case summary & quick actions -->
+          <aside class="border-l border-ink-600 bg-ink-900 overflow-y-auto p-5 flex flex-col space-y-5 h-full">
+            <h3 class="text-xs font-bold uppercase tracking-widest text-slate-400 border-b border-ink-600 pb-2">
+              AI Case Summary
+            </h3>
+            <div class="bg-ink-800 border border-ink-600 rounded-xl p-4 shadow-sm text-xs leading-relaxed text-slate-200">
+              <p id="caseAiSummaryText">Loading summary...</p>
+            </div>
 
-      </section>
+            <h3 class="text-xs font-bold uppercase tracking-widest text-slate-400 border-b border-ink-600 pb-1.5 pt-2">
+              Quick Actions
+            </h3>
+            <div class="flex flex-col gap-3">
+              <button id="caseActionFindLinked" class="w-full py-2.5 px-4 rounded-xl bg-accent hover:bg-blue-500 text-white font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm">
+                <span>🔍</span> Find Linked FIRs
+              </button>
+              <button id="caseActionViewNetwork" class="w-full py-2.5 px-4 rounded-xl bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-200 font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm">
+                <span>🔗</span> View Network
+              </button>
+
+              <button id="caseActionExportPdf" class="w-full py-2.5 px-4 rounded-xl bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-200 font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm">
+                <span>📥</span> Export PDF
+              </button>
+              <button id="caseActionCollab" class="w-full py-2.5 px-4 rounded-xl bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-200 font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm" onclick="alert('Collaboration request dispatched to Inspector.')">
+                <span>👥</span> Request Collaboration
+              </button>
+              <button id="caseActionAlert" class="w-full py-2.5 px-4 rounded-xl bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-200 font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm" onclick="alert('Alert set for case status changes.')">
+                <span>🔔</span> Set Alert
+              </button>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </section>
 
       <!-- VIEW: HOTSPOTS -->
       <section id="view-hotspots" class="view hidden flex-grow h-full overflow-hidden p-6 gap-4 bg-ink-950 grid grid-cols-[260px_1fr_320px] text-slate-200">
@@ -683,10 +748,10 @@ tailwind.config = {
             <div id="hotspotMap" class="w-full h-full rounded-xl z-10"></div>
 
             <!-- Custom Floating Map Legend Overlay -->
-            <div class="absolute bottom-4 right-4 bg-ink-900/90 backdrop-blur border border-ink-600 rounded-xl p-3.5 text-[10px] text-slate-300 w-52 z-[1000] shadow-xl flex flex-col gap-2.5 select-none max-h-[380px] overflow-y-auto">
+            <div id="mapLegendCard" class="absolute bottom-4 right-4 bg-ink-900/90 backdrop-blur border border-ink-600 rounded-xl p-3.5 text-[10px] text-slate-300 w-52 z-[1000] shadow-xl flex flex-col gap-2.5 select-none max-h-[380px] overflow-y-auto transition-all duration-200">
               <div class="font-bold border-b border-ink-600 pb-1.5 text-slate-200 flex justify-between items-center shrink-0">
                 <span>Map Legend</span>
-                <span class="text-[9px] text-slate-400 font-normal">KSP GIS</span>
+                <button id="toggleMapLegendBtn" class="text-[9px] text-accent hover:text-blue-400 font-bold transition focus:outline-none">Hide</button>
               </div>
               <!-- Dynamically populated by updateHotspotLegend() -->
               <div id="hotspotLegendContent" class="flex flex-col gap-1.5">
@@ -759,48 +824,35 @@ tailwind.config = {
       <section id="view-trends" class="view hidden flex-col flex-grow h-full overflow-y-auto p-6 bg-ink-950">
         
         <!-- Filters Panel -->
-        <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-wrap gap-4 items-end mb-6 text-xs text-slate-200 shadow-sm shrink-0">
-          <div class="flex flex-col gap-1.5 min-w-[150px]">
+        <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex gap-6 items-end mb-6 text-xs text-slate-200 shadow-sm shrink-0 w-full">
+          <div class="flex flex-col gap-1.5 flex-grow flex-1">
             <label class="text-[10px] uppercase font-bold text-slate-400">District</label>
-            <select id="trendDistrict" class="px-3 py-1.5 rounded bg-ink-700 border border-ink-600 outline-none text-slate-200 cursor-pointer min-h-[32px] focus:border-accent">
+            <select id="trendDistrict" class="w-full px-3 py-1.5 rounded bg-ink-700 border border-ink-600 outline-none text-slate-200 cursor-pointer min-h-[32px] focus:border-accent">
               <option value="">Statewide</option>
             </select>
           </div>
-          <div class="flex flex-col gap-1.5 min-w-[180px]">
+          <div class="flex flex-col gap-1.5 flex-grow flex-1">
             <label class="text-[10px] uppercase font-bold text-slate-400">Police Station</label>
-            <select id="trendUnit" class="px-3 py-1.5 rounded bg-ink-700 border border-ink-600 outline-none text-slate-200 cursor-pointer min-h-[32px] focus:border-accent">
+            <select id="trendUnit" class="w-full px-3 py-1.5 rounded bg-ink-700 border border-ink-600 outline-none text-slate-200 cursor-pointer min-h-[32px] focus:border-accent">
               <option value="">All Stations</option>
             </select>
           </div>
-          <div class="flex flex-col gap-1.5 min-w-[160px]">
+          <div class="flex flex-col gap-1.5 flex-grow flex-1">
             <label class="text-[10px] uppercase font-bold text-slate-400">Crime Category</label>
-            <select id="trendCategory" class="px-3 py-1.5 rounded bg-ink-700 border border-ink-600 outline-none text-slate-200 cursor-pointer min-h-[32px] focus:border-accent">
+            <select id="trendCategory" class="w-full px-3 py-1.5 rounded bg-ink-700 border border-ink-600 outline-none text-slate-200 cursor-pointer min-h-[32px] focus:border-accent">
               <option value="">All Categories</option>
             </select>
           </div>
-          <div class="flex flex-col gap-1.5 min-w-[150px]">
+          <div class="flex flex-col gap-1.5 flex-grow flex-1">
             <label class="text-[10px] uppercase font-bold text-slate-400">Date Range</label>
-            <select id="trendDateRange" class="px-3 py-1.5 rounded bg-ink-700 border border-ink-600 outline-none text-slate-200 cursor-pointer min-h-[32px] focus:border-accent">
-              <option value="6">Jan 1, 2024 - June 30, 2024</option>
+            <select id="trendDateRange" class="w-full px-3 py-1.5 rounded bg-ink-700 border border-ink-600 outline-none text-slate-200 cursor-pointer min-h-[32px] focus:border-accent">
+              <option value="6">Last 6 Months</option>
               <option value="12">Last 12 Months</option>
               <option value="24">Last 24 months</option>
             </select>
           </div>
-          <div class="flex items-center gap-3 min-h-[32px]">
-            <div class="flex items-center gap-1.5">
-              <span class="text-[10px] uppercase font-bold text-slate-400">Compare Period</span>
-              <input type="checkbox" id="trendCompareToggle" class="w-3 h-3 accent-accent cursor-pointer" checked />
-            </div>
-            <select id="trendComparePeriod" class="px-3 py-1.5 rounded bg-ink-700 border border-ink-600 outline-none text-slate-300 cursor-pointer min-h-[32px]">
-              <option value="prev_year">Vs. Prev Year</option>
-              <option value="prev_period">Vs. Prev Period</option>
-            </select>
-          </div>
-          <div class="flex gap-2 ml-auto">
-            <button id="trendApplyBtn" class="px-4 py-2 bg-accent hover:bg-blue-500 text-white text-xs font-bold rounded-lg transition min-h-[32px]">Apply Filters</button>
-            <button id="trendAiInsightsBtn" class="px-4 py-2 bg-ink-700 border border-ink-600 hover:bg-ink-600 text-slate-300 hover:text-white text-xs font-bold rounded-lg transition flex items-center gap-1.5 min-h-[32px]">
-              <span>💡</span> AI Insights
-            </button>
+          <div class="flex gap-2 shrink-0">
+            <button id="trendApplyBtn" class="px-5 py-2 bg-accent hover:bg-blue-500 text-white text-xs font-bold rounded-lg transition min-h-[32px]">Apply Filters</button>
           </div>
         </div>
 
@@ -916,13 +968,13 @@ tailwind.config = {
       </section>
 
       <!-- VIEW: REPORTS / INSIGHTS -->
-      <section id="view-insights" class="view hidden flex-grow h-full overflow-y-auto p-6 bg-ink-950">
-        <div id="insightsBody"></div>
+      <section id="view-insights" class="view hidden flex-col flex-grow h-full overflow-y-auto p-6 bg-ink-950">
+        <div id="insightsBody" class="w-full"></div>
       </section>
 
       <!-- VIEW: PREDICTIONS / EARLY WARNINGS -->
-      <section id="view-predict" class="view hidden flex-grow h-full overflow-y-auto p-6 bg-ink-950">
-        <div id="predictBody"></div>
+      <section id="view-predict" class="view hidden flex-col flex-grow h-full overflow-y-auto p-6 bg-ink-950">
+        <div id="predictBody" class="w-full"></div>
       </section>
 
       <!-- VIEW: AUDIT LOG -->
@@ -934,6 +986,22 @@ tailwind.config = {
         </div>
         <div id="auditBody"></div>
       </section>
+    </div>
+
+    <!-- History Modal Overlay -->
+    <div id="historyModal" class="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+      <div class="bg-ink-900 border border-ink-600 rounded-xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
+        <div class="px-4 py-3 bg-ink-800 border-b border-ink-600 flex justify-between items-center shrink-0">
+          <span class="text-xs font-bold text-slate-300 tracking-wider uppercase">Chat History</span>
+          <div class="flex items-center gap-2">
+            <button id="newChatBtn" class="px-2.5 py-1 rounded-full bg-accent hover:bg-blue-600 text-white text-[10px] font-bold transition shrink-0">New Chat</button>
+            <button id="closeHistoryModalBtn" class="w-6 h-6 rounded-full bg-ink-700 hover:bg-ink-600 text-slate-300 flex items-center justify-center text-xs transition">✕</button>
+          </div>
+        </div>
+        <div id="chatHistoryList" class="flex-1 overflow-y-auto p-4 space-y-2.5 scrollbar-thin min-h-[200px]">
+          <!-- Dynamic list items -->
+        </div>
+      </div>
     </div>
   </main>
 </div>

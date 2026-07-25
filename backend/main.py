@@ -753,6 +753,7 @@ def get_trends_dashboard(
     district_id: int | None = None,
     unit_id: int | None = None,
     category: str | None = None,
+    months: int = 6,
     session: dict = Depends(current_session),
 ) -> dict:
     scope = _session_scope(session) or {}
@@ -768,7 +769,7 @@ def get_trends_dashboard(
                 del scope["district_id"]
                 
     data = analytics.trends_dashboard(
-        months=6,
+        months=months,
         scope=scope if scope else None,
         category_name=category
     )

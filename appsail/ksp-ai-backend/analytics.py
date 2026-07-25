@@ -1088,8 +1088,11 @@ def trends_dashboard(*, months: int = 6, scope: dict | None = None, category_nam
         
         cat_months = sorted(list(set(r["month"] for r in rows_cats_mom)))
         mom_category = "Cyber Crime"
-        mom_val = 15
-        mom_sparkline = [10, 12, 11, 13, 14, 15]
+        mom_val = 0
+        mom_sparkline = [0, 0, 0, 0, 0, 0]
+        
+        spikes = []
+        drops = []
         
         if len(cat_months) >= 2:
             prev_month = cat_months[-2]
@@ -1097,18 +1100,28 @@ def trends_dashboard(*, months: int = 6, scope: dict | None = None, category_nam
             prev_counts = {r["category"]: r["count"] for r in rows_cats_mom if r["month"] == prev_month}
             curr_counts = {r["category"]: r["count"] for r in rows_cats_mom if r["month"] == curr_month}
             
-            max_inc = -9999
-            best_cat = None
             for cat, curr_cnt in curr_counts.items():
                 prev_cnt = prev_counts.get(cat, 0)
                 if prev_cnt > 0:
                     pct = ((curr_cnt - prev_cnt) / prev_cnt) * 100
-                    if pct > max_inc:
-                        max_inc = pct
-                        best_cat = cat
-            if best_cat:
-                mom_category = best_cat
-                mom_val = int(round(max_inc))
+                    pct_val = int(round(pct))
+                    if pct_val > 0:
+                        spikes.append((cat, pct_val))
+                    elif pct_val < 0:
+                        drops.append((cat, pct_val))
+            
+            if spikes:
+                spikes.sort(key=lambda x: x[1], reverse=True)
+                mom_category = spikes[0][0]
+                mom_val = spikes[0][1]
+            elif drops:
+                drops.sort(key=lambda x: x[1]) # most negative
+                mom_category = drops[0][0]
+                mom_val = drops[0][1]
+            elif curr_counts:
+                # static values present
+                mom_category = list(curr_counts.keys())[0]
+                mom_val = 0
                 
             mom_sparkline = []
             for m in cat_months[-months:]:
@@ -1144,7 +1157,7 @@ def trends_dashboard(*, months: int = 6, scope: dict | None = None, category_nam
             progression["investigation"].append(max(0, inv_count))
 
         # 6. Main Line Chart Series
-        categories_to_plot = [category_name] if category_name else [c["category"] for c in top_categories[:4]]
+        categories_to_plot = [category_name] if category_name else [c["category"] for c in top_categories[:8]]
         
         main_series = []
         for cat in categories_to_plot:
@@ -1155,11 +1168,26 @@ def trends_dashboard(*, months: int = 6, scope: dict | None = None, category_nam
             main_series.append({"label": cat, "data": data_points})
 
     # AI Insights
+    ins1_type = "STABLE ACTIVITY"
+    ins1_text = "Crime volume remained steady over last month"
+    if spikes:
+        ins1_type = "RISING CYBER CRIME" if "cyber" in mom_category.lower() else "CRIME SPIKE DETECTED"
+        ins1_text = f"{mom_val}% spike in {mom_category} over last month"
+    elif drops:
+        ins1_type = "CRIME REDUCTION"
+        ins1_text = f"{abs(mom_val)}% reduction in {mom_category} over last month"
+
+    ins3_type = "UNUSUAL ACTIVITY"
+    ins3_text = "High case volume detected in top categories"
+    if top_categories:
+        ins3_type = "LEAD CATEGORY"
+        ins3_text = f"{top_categories[0]['category']} remains the most prevalent crime type ({top_categories[0]['count']} cases)"
+
     insights = [
         {
             "id": f"insight_1_{scope.get('district_id', 'all') if scope else 'all'}",
-            "type": "RISING CYBER CRIME",
-            "text": f"{mom_val}% spike in {mom_category} over last month",
+            "type": ins1_type,
+            "text": ins1_text,
             "sql": f"SELECT strftime('%Y-%m', c.CrimeRegisteredDate) AS month, COUNT(*) FROM CaseMaster c JOIN CrimeHead ch ON ch.CrimeHeadID = c.CrimeMajorHeadID WHERE ch.CrimeGroupName = '{mom_category}' GROUP BY month ORDER BY month DESC LIMIT 6"
         },
         {
@@ -1170,8 +1198,8 @@ def trends_dashboard(*, months: int = 6, scope: dict | None = None, category_nam
         },
         {
             "id": f"insight_3_{scope.get('district_id', 'all') if scope else 'all'}",
-            "type": "UNUSUAL ACTIVITY",
-            "text": f"High case volume detected in top categories",
+            "type": ins3_type,
+            "text": ins3_text,
             "sql": f"SELECT ch.CrimeGroupName, COUNT(*) AS count FROM CaseMaster c JOIN CrimeHead ch ON ch.CrimeHeadID = c.CrimeMajorHeadID GROUP BY ch.CrimeGroupName ORDER BY count DESC"
         }
     ]

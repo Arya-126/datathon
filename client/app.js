@@ -83,11 +83,15 @@ const state = {
   conversationId: null, // server-side conversation (persistence + PDF unit)
   history: [],          // chat turns for context
   transcript: [],       // for client-side PDF fallback
+  activeResult: null,   // active query result for PDF export
   lang: 'en',
   view: 'chat',
   services: {},         // /health service map (which Catalyst paths are live)
   hotspotLevel: 'district',
   ttsEnabled: true,
+  cases: [],
+  casesPage: 1,
+  casesPerPage: 7,
 };
 
 // ---------------------------------------------------------------- i18n
@@ -372,7 +376,12 @@ function enterApp() {
                    : s.unit ? ` · ${s.unit}`
                    : s.employee_name ? ` · ${s.employee_name}`
                    : '';
-  $('#sessLabel').textContent = `${s.user_id} · ${s.role}${scopeLabel}`;
+  const displayName = s.user_id === 'KSP-DEMO' ? 'Addl. Commissioner Rao' : s.user_id;
+  const displayRole = s.role === 'admin' ? 'LE LEADERSHIP' : s.role.toUpperCase();
+  const labelEl = $('#sessLabel');
+  if (labelEl) {
+    labelEl.innerHTML = `<div class="truncate font-semibold text-slate-200">${displayName}</div><div class="text-[10px] text-slate-400 font-normal truncate mt-0.5">${displayRole}${scopeLabel}</div>`;
+  }
   
   // Update header profile details to match AVALOKANA design
   const userEl = document.getElementById('sessUser');
@@ -402,6 +411,7 @@ function enterApp() {
   if (auditBtn) auditBtn.style.display = s.role === 'admin' ? '' : 'none';
   showView('chat');
   applyI18n();
+  loadConversationsList();
 }
 
 function setupPromptSuggestions() {
@@ -511,6 +521,7 @@ function showView(v) {
 
 // ---------------------------------------------------------------- chat
 function updateDynamicCards(r) {
+  state.activeResult = r;
   const container = document.getElementById('dynamicCards');
   if (!container) return;
   container.innerHTML = '';
@@ -572,30 +583,7 @@ function updateDynamicCards(r) {
     chartContent.append(chartContainer, tableContainer);
     chartCard.appendChild(chartContent);
     
-    // Add actions under the chart card like in the reference image
-    const actions = el('div', { class: 'flex justify-between mt-2 pt-2 border-t border-ink-600/40 shrink-0' });
-    const btnClass = 'px-3 py-1 rounded bg-ink-700 hover:bg-ink-600 text-[10px] text-slate-200 border border-ink-600 transition font-semibold shadow-sm';
-    
-    const pdfBtn = el('button', { class: btnClass }, 'Export PDF');
-    pdfBtn.addEventListener('click', () => {
-      const globalPdfBtn = document.getElementById('pdfBtn');
-      if (globalPdfBtn) globalPdfBtn.click();
-    });
-    
-    const refineBtn = el('button', { class: btnClass }, 'Refine Query');
-    refineBtn.addEventListener('click', () => {
-      const input = document.getElementById('chatInput');
-      if (input) {
-        input.value = 'Refine: ';
-        input.focus();
-      }
-    });
-    
-    const briefBtn = el('button', { class: btnClass }, 'Save to Briefing');
-    briefBtn.addEventListener('click', () => alert('Saved to briefing successfully!'));
-    
-    actions.append(pdfBtn, refineBtn, briefBtn);
-    chartCard.appendChild(actions);
+    // Action buttons removed as requested
     
     // Render chart card on the left, table on the right
     container.append(chartCard, tableCard);
@@ -630,6 +618,99 @@ function updateDynamicCards(r) {
     }, 0);
   } else {
     container.appendChild(tableCard);
+  }
+}
+
+async function loadConversationsList() {
+  const container = document.getElementById('chatHistoryList');
+  if (!container) return;
+  try {
+    const data = await api('/conversations');
+    container.innerHTML = '';
+    const conversations = (data.conversations || []).slice(0, 5);
+    if (conversations.length === 0) {
+      container.innerHTML = `<div class="text-[10px] text-slate-500 italic text-center py-4">No previous chats</div>`;
+      return;
+    }
+    conversations.forEach(c => {
+      const item = document.createElement('button');
+      const isActive = state.conversationId === c.id;
+      item.className = `w-full text-left p-2.5 rounded-lg border text-xs transition duration-150 flex flex-col gap-1 ${
+        isActive 
+          ? 'bg-accent/15 border-accent text-accent font-semibold shadow-sm' 
+          : 'bg-ink-800/40 border-ink-600/40 hover:bg-ink-700/50 hover:text-white text-slate-300'
+      }`;
+      let dateStr = '';
+      if (c.started_at) {
+        try {
+          const d = new Date(c.started_at);
+          dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+        } catch {
+          dateStr = c.started_at;
+        }
+      }
+      item.innerHTML = `
+        <div class="truncate font-medium flex justify-between items-center w-full gap-2">
+          <span class="truncate">${c.title || 'Untitled Query'}</span>
+          <span class="text-[9px] text-slate-500 shrink-0 font-normal">(${c.turns || 0} t)</span>
+        </div>
+        <div class="text-[9px] text-slate-500 font-normal">${dateStr}</div>
+      `;
+      item.addEventListener('click', () => {
+        if (state.conversationId === c.id) return;
+        loadPastConversation(c.id);
+      });
+      container.appendChild(item);
+    });
+  } catch (e) {
+    console.error('Failed to load past conversations', e);
+  }
+}
+
+async function loadPastConversation(convId) {
+  try {
+    const r = await api(`/conversations/${convId}`);
+    state.conversationId = convId;
+    state.history = [];
+    state.transcript = [];
+    persistSession();
+    const chatLog = document.getElementById('chatLog');
+    if (chatLog) chatLog.innerHTML = '';
+    let lastBotTurn = null;
+    for (const turn of r.turns) {
+      if (turn.turn_role === 'user') {
+        addMessage('user', { text: turn.content });
+        state.history.push({ role: 'user', content: turn.content });
+      } else {
+        addMessage('bot', { prefix: turn.content, sql: turn.sql });
+        state.history.push({
+          role: 'assistant',
+          content: turn.sql ? `${turn.content}\n[SQL] ${turn.sql}` : (turn.content || ''),
+        });
+        lastBotTurn = turn;
+      }
+      state.transcript.push({
+        role: turn.turn_role === 'user' ? 'user' : 'assistant',
+        text: turn.content, sql: turn.sql,
+      });
+    }
+    if (lastBotTurn) {
+      renderExplain({
+        language: state.lang,
+        explanation_en: lastBotTurn.content,
+        explanation_kn: '',
+        sql: lastBotTurn.sql,
+        row_count: lastBotTurn.row_count || 0
+      });
+    } else {
+      const explain = document.getElementById('explain');
+      if (explain) explain.innerHTML = `<p class="text-slate-500 italic">${t('chat.explainEmpty')}</p>`;
+    }
+    loadConversationsList();
+    document.getElementById('historyModal')?.classList.add('hidden');
+  } catch (e) {
+    console.error(e);
+    alert(`Failed to load conversation: ${e.message}`);
   }
 }
 
@@ -832,8 +913,10 @@ async function sendChat() {
   if (!q) return;
   $('#chatInput').value = '';
   addMessage('user', { text: q });
-  state.history.push({ role: 'user', content: q });
-  state.transcript.push({ role: 'user', text: q });
+  const isKn = /[ಀ-೿]/.test(q);
+  const normalizedText = q.toLowerCase().trim();
+  const translation = QUERY_TRANSLATIONS[normalizedText] || QUERY_TRANSLATIONS[q.trim()] || '';
+  state.transcript.push({ role: 'user', text: q, translation: translation, isKn: isKn });
 
   const thinkingBubble = el('div', { class: 'msg bot text-slate-400 italic text-xs border border-ink-600/30 shadow-sm flex items-center gap-2' });
   thinkingBubble.innerHTML = '<span class="thinking-dots"><span></span><span></span><span></span></span> <span class="text-[10px]">Thinking</span>';
@@ -858,6 +941,7 @@ async function sendChat() {
       state.conversationId = r.conversation_id;
       persistSession();
     }
+    loadConversationsList();
     
     addMessage('bot', {
       prefix_en: r.answer_prefix_en,
@@ -876,7 +960,7 @@ async function sendChat() {
     });
     state.transcript.push({
       role: 'assistant', text: prefix, sql: r.sql,
-      rows: r.rows, columns: r.columns,
+      rows: r.rows, columns: r.columns, chart_hint: r.chart_hint
     });
     renderExplain(r, r.notes);
     speak(prefix);
@@ -1644,7 +1728,7 @@ function drawMainTrendChart(trendsData) {
     mainTrendChart.destroy();
   }
   
-  const palette = ['#5b8def', '#c9a35b', '#f87171', '#34d399', '#a78bfa', '#fbbf24'];
+  const palette = ['#5b8def', '#c9a35b', '#f87171', '#34d399', '#a78bfa', '#f97316', '#ec4899', '#06b6d4'];
   mainTrendChart = new Chart(canvas, {
     type: 'line',
     data: {
@@ -1700,6 +1784,11 @@ function renderAiInsights(insights) {
           class: 'px-2 py-1 rounded bg-ink-700 hover:bg-ink-600 border border-ink-600 text-[10px] text-slate-300 font-semibold transition',
           onclick: () => {
             showView('chat');
+            const input = document.getElementById('chatInput');
+            if (input) {
+              input.value = ins.text;
+              input.focus();
+            }
             renderExplain({
               language: 'en',
               explanation_en: `AI analysis generated this trend insight based on anomalous category variance.`,
@@ -1794,21 +1883,107 @@ async function loadCasesFilters() {
   const distSel = document.getElementById('caseFilterDistrict');
   if (!distSel || distSel.dataset.loaded) return;
   distSel.dataset.loaded = 'true';
+  
+  distSel.addEventListener('change', async () => {
+    const districtId = distSel.value;
+    await loadStationsForDistrict(districtId);
+  });
+
   try {
     const r = await api('/reference/districts');
     distSel.innerHTML = '<option value="">All Districts</option>' + r.districts
       .map(d => `<option value="${d.id}">${d.name}</option>`)
       .join('');
-  } catch (e) { console.error(e); }
+  } catch (e) {
+    console.error(e);
+  }
+
+  // Load initial stations
+  await loadStationsForDistrict('');
+}
+
+async function loadStationsForDistrict(districtId) {
+  const unitSel = document.getElementById('caseFilterPs');
+  if (!unitSel) return;
+  try {
+    const url = districtId ? `/reference/units?district_id=${districtId}` : '/reference/units';
+    const r = await api(url);
+    unitSel.innerHTML = '<option value="">All Stations</option>' + (r.units || [])
+      .map(u => `<option value="${u.name}">${u.name}</option>`)
+      .join('');
+  } catch (e) {
+    console.error('Failed to load stations', e);
+  }
 }
 
 async function loadCasesInitial() {
   try {
     const r = await api('/cases/search?q=');
-    if (r.cases && r.cases.length) {
-      await loadCaseDetails(r.cases[0].CrimeNo);
-    }
-  } catch (e) { console.error('Initial case load failed', e); }
+    state.cases = r.cases || [];
+    state.casesPage = 1;
+    renderCasesTable();
+    
+    // Default show landing view and hide detail card
+    const landingView = document.getElementById('caseLandingView');
+    const detailView = document.getElementById('caseDetailView');
+    if (landingView) landingView.classList.remove('hidden');
+    if (detailView) detailView.classList.add('hidden');
+  } catch (e) {
+    console.error('Initial case load failed', e);
+  }
+}
+
+function renderCasesTable() {
+  const tbody = document.getElementById('caseLandingTableBody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  
+  const start = (state.casesPage - 1) * state.casesPerPage;
+  const end = Math.min(start + state.casesPerPage, state.cases.length);
+  const pageCases = state.cases.slice(start, end);
+  
+  if (!pageCases.length) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="4" class="p-8 text-center text-slate-500 italic">No cases found matching the criteria.</td>
+      </tr>
+    `;
+    const pgInfo = document.getElementById('casePaginationInfo');
+    if (pgInfo) pgInfo.textContent = 'Page 0 of 0 (Total: 0 cases)';
+    const prevBtn = document.getElementById('casePrevPageBtn');
+    if (prevBtn) prevBtn.disabled = true;
+    const nextBtn = document.getElementById('caseNextPageBtn');
+    if (nextBtn) nextBtn.disabled = true;
+    return;
+  }
+  
+  pageCases.forEach(c => {
+    const tr = el('tr', { class: 'hover:bg-ink-800/40 transition cursor-pointer border-b border-ink-600/30' });
+    
+    tr.addEventListener('click', () => {
+      loadCaseDetails(c.CrimeNo);
+      const detailView = document.getElementById('caseDetailView');
+      if (detailView) detailView.classList.remove('hidden');
+    });
+    
+    const tdFir = el('td', { class: 'p-4 font-bold text-accent hover:underline font-mono' }, c.CrimeNo);
+    const tdStation = el('td', { class: 'p-4 text-slate-300' }, c.station || '—');
+    const tdDistrict = el('td', { class: 'p-4 text-slate-400 font-medium' }, c.district || '—');
+    const brief = c.BriefFacts ? c.BriefFacts.slice(0, 120) + (c.BriefFacts.length > 120 ? '...' : '') : '—';
+    const tdBrief = el('td', { class: 'p-4 text-slate-400' }, brief);
+    
+    tr.append(tdFir, tdStation, tdDistrict, tdBrief);
+    tbody.appendChild(tr);
+  });
+  
+  const totalPages = Math.ceil(state.cases.length / state.casesPerPage);
+  const pgInfo = document.getElementById('casePaginationInfo');
+  if (pgInfo) pgInfo.textContent = `Page ${state.casesPage} of ${totalPages} (Total: ${state.cases.length} cases)`;
+  
+  const prevBtn = document.getElementById('casePrevPageBtn');
+  if (prevBtn) prevBtn.disabled = state.casesPage <= 1;
+  const nextBtn = document.getElementById('caseNextPageBtn');
+  if (nextBtn) nextBtn.disabled = state.casesPage >= totalPages;
 }
 
 async function loadCaseDetails(crimeNo) {
@@ -1964,29 +2139,33 @@ function renderCasePersons(r, officerName, officerRank) {
 }
 
 async function loadCaseLinked(crimeNo) {
-  const container = document.getElementById('caseTabContent-linkedList');
-  if (!container) return;
-  container.innerHTML = '';
+  const tbody = document.getElementById('caseTabTable-linked');
+  if (!tbody) return;
+  tbody.innerHTML = '';
   try {
     const lk = await api(`/case/${encodeURIComponent(crimeNo)}/linked`);
     if (!lk.linked || !lk.linked.length) {
-      container.innerHTML = '<div class="text-slate-500 italic text-center py-6">No evidence-linked cases found.</div>';
+      tbody.innerHTML = '<tr><td colspan="4" class="py-6 text-center text-slate-500 italic">No evidence-linked cases found.</td></tr>';
       return;
     }
-    lk.linked.slice(0, 5).forEach(c => {
-      const card = el('div', { class: 'p-3 rounded-lg bg-ink-800 border border-ink-600 hover:bg-ink-700/50 transition cursor-pointer' }, [
-        el('div', { class: 'flex items-center justify-between font-bold text-xs' }, [
-          el('span', { class: 'text-accent font-mono' }, c.crime_no),
-          el('span', { class: 'text-[10px] px-2 py-0.5 rounded bg-ink-750' }, `Score: ${c.score}`)
+    lk.linked.slice(0, 8).forEach(c => {
+      const tr = el('tr', { class: 'border-b border-ink-600/30 hover:bg-ink-700/30 transition' }, [
+        el('td', { class: 'py-2.5 font-mono text-xs text-accent font-bold cursor-pointer hover:underline' }, c.crime_no),
+        el('td', { class: 'py-2.5 text-xs text-slate-300' }, [
+          el('div', { class: 'font-semibold text-slate-200' }, tVal(c.crime_type)),
+          el('div', { class: 'text-[10px] text-slate-400 mt-0.5' }, `Station: ${tVal(c.station)} · Date: ${c.date.slice(0, 10)}`),
+          el('div', { class: 'text-[10px] text-emerald-400 font-medium mt-0.5' }, c.reasons.join(' · '))
         ]),
-        el('div', { class: 'text-[10px] text-slate-400 mt-1.5' }, `${tVal(c.crime_type)} · Station: ${tVal(c.station)} · Date: ${c.date}`),
-        el('div', { class: 'text-[10px] text-emerald-400 font-semibold mt-1' }, c.reasons.join(' · '))
+        el('td', { class: 'py-2.5 text-xs' }, [
+          el('span', { class: `px-2 py-0.5 rounded text-[10px] font-bold ${c.status === 'Filed' || c.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}` }, tVal(c.status || 'Under Investigation'))
+        ]),
+        el('td', { class: 'py-2.5 text-xs font-mono font-bold text-slate-400' }, `Score: ${c.score}`)
       ]);
-      card.addEventListener('click', () => loadCaseDetails(c.crime_no));
-      container.appendChild(card);
+      tr.querySelector('td').addEventListener('click', () => loadCaseDetails(c.crime_no));
+      tbody.appendChild(tr);
     });
   } catch (e) {
-    container.innerHTML = '<div class="text-amber-500 italic text-center py-6">Linked cases loading restricted by scope policy.</div>';
+    tbody.innerHTML = '<tr><td colspan="4" class="py-6 text-center text-amber-500 italic">Linked cases loading restricted by scope policy.</td></tr>';
   }
 }
 
@@ -2108,7 +2287,7 @@ async function loadInsights() {
     class: 'text-xs uppercase tracking-wider text-slate-400 mb-3',
   }, 'Socio-demographic insights'));
   const grid = el('div', {
-    class: 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mb-8',
+    class: 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-12 max-w-[85%] mx-auto mb-8',
   });
   body.appendChild(grid);
 
@@ -2119,10 +2298,39 @@ async function loadInsights() {
     grid.appendChild(el('div', { class: 'text-amber-400' }, e.message));
     ov = { panels: [] };
   }
+
+  // Reorder panels: Accused by age band, Accused by gender, Victims by gender,
+  // Complainants by religion, Complainants by occupation.
+  const desiredOrder = [
+    'Accused by age band',
+    'Accused by gender',
+    'Victims by gender',
+    'Complainants by religion',
+    'Complainants by occupation'
+  ];
+  const orderedPanels = [];
+  desiredOrder.forEach(label => {
+    const p = ov.panels.find(x => x.label.trim().toLowerCase() === label.toLowerCase());
+    if (p) orderedPanels.push(p);
+  });
+  ov.panels.forEach(p => {
+    if (!orderedPanels.includes(p)) orderedPanels.push(p);
+  });
+
   const palette = ['#5b8def', '#c9a35b', '#f87171', '#34d399', '#a78bfa', '#fbbf24'];
-  for (const panel of ov.panels) {
+  orderedPanels.forEach((panel, index) => {
     const canvas = el('canvas', { height: '160' });
-    grid.appendChild(el('div', { class: 'hotspot-card' }, [
+    
+    // lg:col-span-2 means 1/3 width on desktops (6 cols total).
+    // lg:col-start-2 on the 4th item shifts it right by 1 col to center the bottom row.
+    let spanClass = 'col-span-1 md:col-span-1 lg:col-span-2';
+    if (index === 3) {
+      spanClass = 'col-span-1 md:col-span-1 lg:col-span-2 lg:col-start-2';
+    } else if (index === 4) {
+      spanClass = 'col-span-1 md:col-span-2 lg:col-span-2';
+    }
+
+    grid.appendChild(el('div', { class: `hotspot-card ${spanClass}` }, [
       el('div', { class: 'text-sm font-semibold mb-2' }, panel.label),
       canvas,
     ]));
@@ -2141,7 +2349,7 @@ async function loadInsights() {
       },
     });
     insightsCharts.push(chart);
-  }
+  });
 
   // --- Behavioural profiling: repeat offenders + recidivism ---
   body.appendChild(el('h3', {
@@ -2438,7 +2646,7 @@ async function loadPredict() {
               el('div', { class: 'text-xs text-slate-400 mt-0.5 truncate' }, tVal(rec.district)),
             ]),
             el('div', { class: 'text-right shrink-0' }, [
-              el('div', { class: 'font-bold text-base text-amber-400 tracking-wide font-mono' }, rec.window),
+              el('div', { class: 'font-bold text-base tracking-wide font-mono', style: 'color: #c8a25b;' }, rec.window),
               el('div', { class: 'text-[11px] text-slate-400 mt-0.5 font-medium' },
                 `${rec.crimes} incidents · ${rec.heinous} heinous`
               )
@@ -2540,68 +2748,379 @@ async function loadAudit(firFilter) {
 // ---------------------------------------------------------------- PDF export
 // Server-side first (Catalyst SmartBrowz — proper fonts incl. Kannada, and a
 // copy lands in Stratus for the audit trail); jsPDF fallback offline.
-async function exportPDF() {
-  if (state.conversationId) {
-    try {
-      const res = await fetch(API_BASE + '/export/pdf', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${state.token}`,
-        },
-        body: JSON.stringify({ conversation_id: state.conversationId }),
-      });
-      if (res.ok && res.headers.get('content-type')?.includes('pdf')) {
-        const blob = await res.blob();
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `ksp-conversation-${state.conversationId}.pdf`;
-        a.click();
-        URL.revokeObjectURL(a.href);
-        return;
+function generateInMemoryChartImage(labels, data, chartType) {
+  return new Promise((resolve) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 400;
+    canvas.height = 200;
+    canvas.style.position = 'absolute';
+    canvas.style.left = '-9999px';
+    document.body.appendChild(canvas);
+    
+    const chart = new Chart(canvas, {
+      type: chartType,
+      data: {
+        labels: labels,
+        datasets: [{
+          data: data,
+          backgroundColor: '#5b8def',
+          borderColor: '#93c5fd',
+          fill: true,
+          tension: 0.3
+        }]
+      },
+      options: {
+        animation: false,
+        responsive: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: '#334155', font: { size: 8 } }, grid: { color: '#e2e8f0' } },
+          y: { ticks: { color: '#334155', font: { size: 8 } }, grid: { color: '#e2e8f0' } }
+        }
       }
-    } catch {}
-    // fall through to client-side rendering
-  }
-  exportPDFClient();
+    });
+    
+    setTimeout(() => {
+      try {
+        const imgData = canvas.toDataURL('image/png');
+        chart.destroy();
+        canvas.remove();
+        resolve(imgData);
+      } catch (e) {
+        console.error(e);
+        resolve(null);
+      }
+    }, 50);
+  });
 }
 
-function exportPDFClient() {
+async function exportPDF() {
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
   const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
-  pdf.setFontSize(16); pdf.text('KSP Crime AI — Conversation Transcript', 40, 50);
-  pdf.setFontSize(10); pdf.setTextColor(120);
+  
+  pdf.setFontSize(16); pdf.setFont(undefined, 'bold');
+  pdf.text('KSP Crime AI — Crime Intelligence Report', 40, 50);
+  
+  pdf.setFontSize(10); pdf.setFont(undefined, 'normal'); pdf.setTextColor(120);
   pdf.text(`Session: ${state.session?.user_id || '—'} · Role: ${state.session?.role || '—'}`, 40, 68);
   pdf.text(`Exported: ${now}`, 40, 82);
-  pdf.setTextColor(0);
-  let y = 110;
-  const line = (txt, indent = 0) => {
-    const wrapped = pdf.splitTextToSize(txt, 500 - indent);
-    for (const ln of wrapped) {
-      if (y > 780) { pdf.addPage(); y = 50; }
-      pdf.text(ln, 40 + indent, y); y += 14;
+  pdf.setDrawColor(220);
+  pdf.line(40, 92, 550, 92);
+  
+  let y = 115;
+  
+  const ensureSpace = (height) => {
+    if (y + height > 780) {
+      pdf.addPage();
+      y = 50;
+      return true;
     }
+    return false;
   };
-  if (!state.transcript.length) {
-    line('(No conversation yet.)');
-  }
-  for (const t of state.transcript) {
+
+  const drawTextLine = (label, text, indent = 12) => {
+    ensureSpace(24);
     pdf.setFont(undefined, 'bold');
-    line(t.role === 'user' ? 'Investigator' : 'AI');
+    pdf.setFontSize(9);
+    pdf.setTextColor(80);
+    pdf.text(label, 40, y);
+    y += 12;
+    
     pdf.setFont(undefined, 'normal');
-    if (t.text) line(t.text, 12);
-    if (t.sql) {
-      pdf.setFont('Courier', 'normal'); pdf.setFontSize(9);
-      line(t.sql, 12);
-      pdf.setFont(undefined, 'normal'); pdf.setFontSize(10);
-    }
-    if (t.rows?.length) {
-      line(`(${t.rows.length} rows)`, 12);
-    }
+    pdf.setFontSize(10);
+    pdf.setTextColor(0);
+    const wrapped = pdf.splitTextToSize(text || '—', 500 - indent);
+    wrapped.forEach(line => {
+      ensureSpace(14);
+      pdf.text(line, 40 + indent, y);
+      y += 14;
+    });
     y += 6;
+  };
+
+  // Renders non-Latin text (Kannada, etc.) via Canvas API so the browser's
+  // native font shaping is used, then embeds the result as a PNG image.
+  const drawNonLatinText = (label, text, indent = 12) => {
+    ensureSpace(24);
+    pdf.setFont(undefined, 'bold');
+    pdf.setFontSize(9);
+    pdf.setTextColor(80);
+    pdf.text(label, 40, y);
+    y += 12;
+
+    if (!text) { y += 6; return; }
+
+    const fontSize = 14;
+    const lineHeight = fontSize * 1.4;
+    const maxWidth = 490 - indent;
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    ctx.font = `${fontSize}px "Noto Sans Kannada", "Noto Sans", sans-serif`;
+
+    // Word-wrap the text to fit within maxWidth
+    const words = text.split(/\s+/);
+    const lines = [];
+    let currentLine = '';
+    for (const word of words) {
+      const testLine = currentLine ? currentLine + ' ' + word : word;
+      if (ctx.measureText(testLine).width > maxWidth && currentLine) {
+        lines.push(currentLine);
+        currentLine = word;
+      } else {
+        currentLine = testLine;
+      }
+    }
+    if (currentLine) lines.push(currentLine);
+
+    const canvasW = maxWidth + 10;
+    const canvasH = lines.length * lineHeight + 4;
+    canvas.width = canvasW * 2;   // 2x for retina clarity
+    canvas.height = canvasH * 2;
+    ctx.scale(2, 2);
+    ctx.font = `${fontSize}px "Noto Sans Kannada", "Noto Sans", sans-serif`;
+    ctx.fillStyle = '#000';
+    ctx.textBaseline = 'top';
+    lines.forEach((line, i) => {
+      ctx.fillText(line, 0, i * lineHeight + 2);
+    });
+
+    const imgData = canvas.toDataURL('image/png');
+    ensureSpace(canvasH + 8);
+    pdf.addImage(imgData, 'PNG', 40 + indent, y - 10, canvasW, canvasH);
+    y += canvasH + 6;
+  };
+
+  if (!state.transcript.length) {
+    pdf.text('No conversation transcript to export.', 40, y);
+    pdf.save(`ksp-crime-report-${now.replace(/[: ]/g, '-')}.pdf`);
+    return;
   }
-  pdf.save(`ksp-crime-ai-${now.replace(/[: ]/g, '-')}.pdf`);
+
+  for (const t of state.transcript) {
+    if (t.role === 'user') {
+      const isKn = t.isKn || /[ಀ-೿]/.test(t.text);
+      if (isKn) {
+        drawNonLatinText(`User Query (Kannada):`, t.text, 12);
+      } else {
+        drawTextLine(`User Query (English):`, t.text, 12);
+      }
+      if (t.translation) {
+        // Translation is the opposite language of the query
+        if (isKn) {
+          drawTextLine('Translated Prompt:', t.translation, 12);
+        } else {
+          drawNonLatinText('Translated Prompt:', t.translation, 12);
+        }
+      }
+    } else {
+      drawTextLine('AI Response (Understanding):', t.text, 12);
+      // No SQL query rendered as requested
+      
+      // Render Dynamic Response Card Data (Chart & Table)
+      if (t.rows && t.rows.length && t.columns && t.columns.length) {
+        const hasChart = t.chart_hint === 'line' || t.chart_hint === 'bar';
+        
+        // 1. Chart
+        if (hasChart) {
+          ensureSpace(230);
+          pdf.setFont(undefined, 'bold');
+          pdf.setFontSize(10);
+          pdf.setTextColor(50);
+          pdf.text(t.chart_hint === 'line' ? 'Monthly Trend' : 'Breakdown Chart', 40, y);
+          y += 14;
+          
+          const labelCol = t.columns[0];
+          const valCol = t.columns[t.columns.length - 1];
+          const labels = t.rows.map(r => String(tVal(r[labelCol]) ?? ''));
+          const chartData = t.rows.map(r => r[valCol] ?? 0);
+          
+          const imgData = await generateInMemoryChartImage(labels, chartData, t.chart_hint);
+          if (imgData) {
+            pdf.addImage(imgData, 'PNG', 40, y, 360, 180);
+            y += 190;
+          }
+        }
+        
+        // 2. Table
+        ensureSpace(80);
+        pdf.setFont(undefined, 'bold');
+        pdf.setFontSize(10);
+        pdf.setTextColor(50);
+        pdf.text('Result Table', 40, y);
+        y += 14;
+        
+        const startX = 40;
+        const colWidth = 500 / t.columns.length;
+        
+        // Draw header background
+        pdf.setFillColor(245, 247, 250);
+        pdf.rect(40, y - 10, 510, 18, 'F');
+        
+        pdf.setFontSize(8.5); pdf.setFont(undefined, 'bold'); pdf.setTextColor(70);
+        t.columns.forEach((col, idx) => {
+          pdf.text(tCol(col).toUpperCase(), startX + (idx * colWidth), y + 2);
+        });
+        pdf.setDrawColor(200);
+        pdf.line(40, y + 10, 550, y + 10);
+        y += 24;
+        
+        pdf.setFont(undefined, 'normal'); pdf.setTextColor(0);
+        t.rows.forEach((row, rowIdx) => {
+          if (y > 780) {
+            pdf.addPage();
+            y = 50;
+            
+            // Draw header again on new page
+            pdf.setFillColor(245, 247, 250);
+            pdf.rect(40, y - 10, 510, 18, 'F');
+            pdf.setFontSize(8.5); pdf.setFont(undefined, 'bold'); pdf.setTextColor(70);
+            t.columns.forEach((col, idx) => {
+              pdf.text(tCol(col).toUpperCase(), startX + (idx * colWidth), y + 2);
+            });
+            pdf.setDrawColor(200);
+            pdf.line(40, y + 10, 550, y + 10);
+            y += 24;
+            pdf.setFont(undefined, 'normal'); pdf.setTextColor(0);
+          }
+          
+          if (rowIdx % 2 === 1) {
+            pdf.setFillColor(250, 250, 250);
+            pdf.rect(40, y - 10, 510, 14, 'F');
+          }
+          
+          t.columns.forEach((col, idx) => {
+            const val = String(tVal(row[col]) ?? '');
+            const wrapped = pdf.splitTextToSize(val, colWidth - 10);
+            pdf.text(wrapped[0] || '', startX + (idx * colWidth), y);
+          });
+          y += 14;
+        });
+        
+        y += 10;
+      }
+      
+      // Draw Separator Line
+      ensureSpace(15);
+      pdf.setDrawColor(240);
+      pdf.line(40, y, 550, y);
+      y += 20;
+    }
+  }
+  
+  pdf.save(`ksp-crime-report-${now.replace(/[: ]/g, '-')}.pdf`);
+}
+
+function exportActiveCasePDF() {
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
+  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  
+  const crimeNo = document.getElementById('caseHeadCrimeNo')?.textContent || '—';
+  const district = document.getElementById('caseHeadDistrict')?.textContent || '—';
+  const station = document.getElementById('caseHeadStation')?.textContent || '—';
+  const status = document.getElementById('caseHeadStatus')?.textContent || '—';
+  const summary = document.getElementById('caseAiSummaryText')?.textContent || '—';
+  
+  pdf.setFontSize(16); pdf.setFont(undefined, 'bold');
+  pdf.text(`KSP Crime AI — AI Case Summary Report`, 40, 50);
+  
+  pdf.setFontSize(10); pdf.setFont(undefined, 'normal'); pdf.setTextColor(120);
+  pdf.text(`Case ID: ${crimeNo} · Scope: ${district} · Station: ${station}`, 40, 68);
+  pdf.text(`Generated: ${now} · Current Status: ${status}`, 40, 82);
+  pdf.setDrawColor(220);
+  pdf.line(40, 92, 550, 92);
+  
+  let y = 115;
+  
+  const ensureSpace = (height) => {
+    if (y + height > 780) {
+      pdf.addPage();
+      y = 50;
+      return true;
+    }
+    return false;
+  };
+  
+  // Section 1: AI Case Summary Text Box
+  ensureSpace(120);
+  pdf.setFont(undefined, 'bold'); pdf.setFontSize(11); pdf.setTextColor(40);
+  pdf.text('AI CASE SUMMARY', 40, y);
+  y += 15;
+  
+  pdf.setFont(undefined, 'normal'); pdf.setFontSize(10); pdf.setTextColor(0);
+  const wrappedSummary = pdf.splitTextToSize(summary, 500);
+  wrappedSummary.forEach(ln => {
+    ensureSpace(14);
+    pdf.text(ln, 40, y);
+    y += 14;
+  });
+  y += 20;
+  
+  // Section 2: Case Metadata Table
+  ensureSpace(140);
+  pdf.setFont(undefined, 'bold'); pdf.setFontSize(11); pdf.setTextColor(40);
+  pdf.text('CASE SHEET METADATA', 40, y);
+  y += 15;
+  
+  const sections = document.getElementById('caseKpiSections')?.textContent || '—';
+  const complainant = document.getElementById('caseKpiComplainant')?.textContent || '—';
+  const complainantContact = document.getElementById('caseKpiComplainantContact')?.textContent || '—';
+  const accused = document.getElementById('caseKpiAccusedName')?.textContent || '—';
+  const accusedCount = document.getElementById('caseKpiAccusedCount')?.textContent || '—';
+  const ioName = document.getElementById('caseKpiIoName')?.textContent || '—';
+  const ioRank = document.getElementById('caseKpiIoRank')?.textContent || '—';
+  
+  const drawMetaRow = (label1, val1, label2, val2) => {
+    ensureSpace(18);
+    pdf.setFont(undefined, 'bold'); pdf.setFontSize(9); pdf.setTextColor(100);
+    pdf.text(label1, 40, y);
+    pdf.text(label2, 280, y);
+    y += 12;
+    pdf.setFont(undefined, 'normal'); pdf.setFontSize(9.5); pdf.setTextColor(0);
+    pdf.text(val1, 40, y);
+    pdf.text(val2, 280, y);
+    y += 16;
+  };
+  
+  drawMetaRow('IPC Sections Filed', sections, 'Investigating Officer (I.O.)', `${ioName} (${ioRank})`);
+  drawMetaRow('Complainant Name', `${complainant} (${complainantContact})`, 'Accused Details', `${accused} (${accusedCount})`);
+  y += 20;
+  
+  // Section 3: Visual Timeline
+  ensureSpace(150);
+  pdf.setFont(undefined, 'bold'); pdf.setFontSize(11); pdf.setTextColor(40);
+  pdf.text('CASE TIMELINE EVENTS', 40, y);
+  y += 15;
+  
+  const timelineContainer = document.getElementById('caseTimelineList');
+  if (timelineContainer) {
+    const items = timelineContainer.children;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const dateText = item.children[1]?.textContent || '—';
+      const eventTitle = item.children[2]?.textContent || '—';
+      const eventDesc = item.children[3]?.textContent || '—';
+      
+      ensureSpace(40);
+      pdf.setFont(undefined, 'bold'); pdf.setFontSize(9); pdf.setTextColor(110);
+      pdf.text(dateText, 45, y);
+      y += 12;
+      pdf.setFont(undefined, 'bold'); pdf.setFontSize(9.5); pdf.setTextColor(40);
+      pdf.text(eventTitle, 45, y);
+      y += 12;
+      pdf.setFont(undefined, 'normal'); pdf.setFontSize(9); pdf.setTextColor(80);
+      const wrappedDesc = pdf.splitTextToSize(eventDesc, 470);
+      wrappedDesc.forEach(line => {
+        ensureSpace(13);
+        pdf.text(line, 55, y);
+        y += 13;
+      });
+      y += 10;
+    }
+  }
+  
+  pdf.save(`ksp-case-summary-${crimeNo.replace(/[: ]/g, '-')}.pdf`);
 }
 
 // ---------------------------------------------------------------- boot
@@ -2614,6 +3133,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
   });
   $('#pdfBtn').addEventListener('click', exportPDF);
+  const headerExportPdfBtn = document.getElementById('headerExportPdfBtn');
+  if (headerExportPdfBtn) {
+    headerExportPdfBtn.addEventListener('click', exportPDF);
+  }
 
   // Custom chat page controls binding
   const ttsToggle = document.getElementById('ttsToggleBtn');
@@ -2651,6 +3174,58 @@ document.addEventListener('DOMContentLoaded', async () => {
             </div>
           `;
         }
+        loadConversationsList();
+      }
+    });
+  }
+
+  const newChatBtn = document.getElementById('newChatBtn');
+  if (newChatBtn) {
+    newChatBtn.addEventListener('click', () => {
+      state.history = [];
+      state.transcript = [];
+      state.conversationId = null;
+      state.activeResult = null;
+      persistSession();
+      const chatLog = document.getElementById('chatLog');
+      if (chatLog) chatLog.innerHTML = '';
+      const explain = document.getElementById('explain');
+      if (explain) explain.innerHTML = `<p class="text-slate-500 italic">${t('chat.explainEmpty')}</p>`;
+      const container = document.getElementById('dynamicCards');
+      if (container) {
+        container.innerHTML = `
+          <div class="col-span-2 flex flex-col items-center justify-center text-center py-8 text-slate-500 italic text-xs">
+            <span>Submit a query to view dynamic charts and result tables here.</span>
+          </div>
+        `;
+      }
+      loadConversationsList();
+      document.getElementById('historyModal')?.classList.add('hidden');
+    });
+  }
+
+  // History Dropdown / Modal toggles
+  const historyDropdownBtn = document.getElementById('historyDropdownBtn');
+  const historyModal = document.getElementById('historyModal');
+  const closeHistoryModalBtn = document.getElementById('closeHistoryModalBtn');
+
+  if (historyDropdownBtn && historyModal) {
+    historyDropdownBtn.addEventListener('click', () => {
+      historyModal.classList.remove('hidden');
+      loadConversationsList();
+    });
+  }
+
+  if (closeHistoryModalBtn && historyModal) {
+    closeHistoryModalBtn.addEventListener('click', () => {
+      historyModal.classList.add('hidden');
+    });
+  }
+
+  if (historyModal) {
+    historyModal.addEventListener('click', (e) => {
+      if (e.target === historyModal) {
+        historyModal.classList.add('hidden');
       }
     });
   }
@@ -2840,6 +3415,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  // Map Legend Toggle (View/Hide)
+  const toggleMapLegendBtn = document.getElementById('toggleMapLegendBtn');
+  if (toggleMapLegendBtn) {
+    toggleMapLegendBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const legendContent = document.getElementById('hotspotLegendContent');
+      const legendCard = document.getElementById('mapLegendCard');
+      if (legendContent && legendCard) {
+        const isHidden = legendContent.classList.toggle('hidden');
+        if (isHidden) {
+          toggleMapLegendBtn.textContent = 'Show';
+          legendCard.classList.remove('gap-2.5');
+          legendCard.style.maxHeight = '35px';
+          legendCard.style.overflow = 'hidden';
+        } else {
+          toggleMapLegendBtn.textContent = 'Hide';
+          legendCard.classList.add('gap-2.5');
+          legendCard.style.maxHeight = '380px';
+          legendCard.style.overflowY = 'auto';
+        }
+      }
+    });
+  }
+
   // Timeline slider slider
   const hsSlider = document.getElementById('hsTimelineSlider');
   if (hsSlider) {
@@ -2907,11 +3506,41 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   const dlHeaderBtn = document.getElementById('caseHeaderDownloadBtn');
   if (dlHeaderBtn) {
-    dlHeaderBtn.addEventListener('click', () => exportPDF());
+    dlHeaderBtn.addEventListener('click', () => exportActiveCasePDF());
   }
   const dlActionBtn = document.getElementById('caseActionExportPdf');
   if (dlActionBtn) {
-    dlActionBtn.addEventListener('click', () => exportPDF());
+    dlActionBtn.addEventListener('click', () => exportActiveCasePDF());
+  }
+
+  const caseBackBtn = document.getElementById('caseBackBtn');
+  if (caseBackBtn) {
+    caseBackBtn.addEventListener('click', () => {
+      const detailView = document.getElementById('caseDetailView');
+      if (detailView) detailView.classList.add('hidden');
+      renderCasesTable();
+    });
+  }
+
+  const prevBtn = document.getElementById('casePrevPageBtn');
+  if (prevBtn) {
+    prevBtn.addEventListener('click', () => {
+      if (state.casesPage > 1) {
+        state.casesPage--;
+        renderCasesTable();
+      }
+    });
+  }
+
+  const nextBtn = document.getElementById('caseNextPageBtn');
+  if (nextBtn) {
+    nextBtn.addEventListener('click', () => {
+      const totalPages = Math.ceil(state.cases.length / state.casesPerPage);
+      if (state.casesPage < totalPages) {
+        state.casesPage++;
+        renderCasesTable();
+      }
+    });
   }
 
   // Search/Filters button
@@ -2942,11 +3571,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (num) {
           if (r.cases && r.cases.length) {
             await loadCaseDetails(r.cases[0].CrimeNo);
+            const detailView = document.getElementById('caseDetailView');
+            if (detailView) detailView.classList.remove('hidden');
           } else {
             alert(`No matching case found for sequence number: ${num}`);
           }
         } else {
-          handleCaseSearchList(r.cases);
+          state.cases = r.cases || [];
+          state.casesPage = 1;
+          renderCasesTable();
+          const detailView = document.getElementById('caseDetailView');
+          if (detailView) detailView.classList.add('hidden');
         }
       } catch (e) {
         console.error(e);
