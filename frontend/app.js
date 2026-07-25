@@ -88,7 +88,7 @@ const state = {
   view: 'chat',
   services: {},         // /health service map (which Catalyst paths are live)
   hotspotLevel: 'district',
-  ttsEnabled: true,
+  lastAuditEntries: [], // for log export
   cases: [],
   casesPage: 1,
   casesPerPage: 7,
@@ -122,7 +122,8 @@ const I18N = {
     'trends.hint': 'Monthly crime volume by category, last 24 months.',
     'audit.placeholder': 'Reverse lookup: FIR / CrimeNo (e.g. 1044300062026…)',
     'audit.who': 'Who touched this FIR?',
-    'audit.showAll': 'Show all',
+    'audit.showAll': 'Clear Filter',
+    'audit.clearFilter': 'Clear Filter',
     // view titles + subtitles (used by showView)
     'view.chat.title': 'Conversational AI Intelligence',
     'view.chat.sub': 'Ask in English or Kannada. Voice is supported.',
@@ -170,7 +171,8 @@ const I18N = {
     'trends.hint': 'ಕಳೆದ 24 ತಿಂಗಳ ವರ್ಗವಾರು ಮಾಸಿಕ ಅಪರಾಧ ಪ್ರಮಾಣ.',
     'audit.placeholder': 'ರಿವರ್ಸ್ ಲುಕ್‌ಅಪ್: ಎಫ್‌ಐಆರ್ / CrimeNo (ಉದಾ. 1044300062026…)',
     'audit.who': 'ಈ ಎಫ್‌ಐಆರ್ ಅನ್ನು ಯಾರು ನೋಡಿದ್ದಾರೆ?',
-    'audit.showAll': 'ಎಲ್ಲಾ ತೋರಿಸಿ',
+    'audit.showAll': 'ಫಿಲ್ಟರ್ ತೆರವುಗೊಳಿಸಿ',
+    'audit.clearFilter': 'ಫಿಲ್ಟರ್ ತೆರವುಗೊಳಿಸಿ',
     'view.chat.title': 'ಸಂಭಾಷಣಾತ್ಮಕ AI ಬುದ್ಧಿಮತ್ತೆ',
     'view.chat.sub': 'ಇಂಗ್ಲಿಷ್ ಅಥವಾ ಕನ್ನಡದಲ್ಲಿ ಕೇಳಿ. ಧ್ವನಿ ಬೆಂಬಲಿತ.',
     'view.hotspots.title': 'ಭೂಗೋಳ (ಹಾಟ್‌ಸ್ಪಾಟ್‌ಗಳು)',
@@ -258,11 +260,17 @@ async function api(path, opts = {}) {
   if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
   const res = await fetch(API_BASE + path, { ...opts, headers });
   if (!res.ok) {
+    if (res.status === 401 && path !== '/login') {
+      clearSession();
+      state.token = null;
+      $('#login')?.classList.remove('hidden');
+    }
     const body = await res.text();
     throw new Error(`${res.status}: ${body}`);
   }
   return res.json();
 }
+
 
 function el(tag, attrs = {}, children = []) {
   const e = document.createElement(tag);
@@ -570,16 +578,36 @@ function updateDynamicCards(r) {
   if (!container) return;
   container.innerHTML = '';
   
-  if (!r.rows || !r.rows.length) {
+  if (!r || !r.rows || !r.rows.length) {
+    const hasSQL = r && r.sql;
+    const scopeInfo = state.session?.district || state.session?.unit || '';
+    container.innerHTML = hasSQL
+      ? `<div class="col-span-2 bg-ink-800 border border-ink-600 rounded-xl p-5 flex flex-col items-center justify-center text-center gap-3">
+           <div class="text-slate-400 text-xs font-semibold">Query returned 0 rows</div>
+           <div class="text-slate-500 text-[10px] max-w-sm leading-relaxed">
+             ${scopeInfo ? `Your data scope is limited to <span class="text-accent font-bold">${scopeInfo}</span>. ` : ''}
+             The SQL executed successfully but no matching records were found. Try broadening your query or asking about a different crime type.
+           </div>
+           ${hasSQL ? `<pre class="text-[9px] text-slate-600 bg-ink-900 rounded p-2 max-w-full overflow-x-auto mt-1 border border-ink-700">${r.sql.slice(0, 200)}${r.sql.length > 200 ? '…' : ''}</pre>` : ''}
+         </div>`
+      : `<div class="col-span-2 flex flex-col items-center justify-center text-center py-10 text-slate-500 italic text-xs">
+           <span>No active data results to display. Try asking for counts, trends, or hotspots.</span>
+         </div>`;
+    return;
+  }
+
+
+  const columns = r.columns && r.columns.length ? r.columns : Object.keys(r.rows[0] || {});
+  if (!columns.length) {
     container.innerHTML = `
       <div class="col-span-2 flex flex-col items-center justify-center text-center py-10 text-slate-500 italic text-xs">
-        <span>No active data results to display. Try asking for counts, trends, or hotspots.</span>
+        <span>No columns in data response.</span>
       </div>
     `;
     return;
   }
   
-  const hasChart = r.chart_hint === 'bar' || r.chart_hint === 'line';
+  const hasChart = (r.chart_hint === 'bar' || r.chart_hint === 'line' || r.chart_hint === 'pie') && r.rows.length > 0 && columns.length >= 2;
   
   // 1. Create Table Card
   const tableCard = el('div', { class: `bg-ink-800 border border-ink-600 rounded-xl p-4 flex flex-col h-[280px] overflow-hidden ${hasChart ? '' : 'col-span-2'}` });
@@ -589,17 +617,17 @@ function updateDynamicCards(r) {
   ]));
   
   const tableWrapper = el('div', { class: 'flex-grow overflow-auto text-xs' });
-  tableWrapper.appendChild(renderTable(r.columns, r.rows));
+  tableWrapper.appendChild(renderTable(columns, r.rows));
   tableCard.appendChild(tableWrapper);
   
   // 2. Create Chart Card if applicable
   if (hasChart) {
-    const labelCol = r.columns[0];
-    const valCol = r.columns[r.columns.length - 1];
+    const labelCol = columns[0];
+    const valCol = columns[columns.length - 1];
 
     const chartCard = el('div', { class: 'bg-ink-800 border border-ink-600 rounded-xl p-4 flex flex-col h-[280px] overflow-hidden' });
     chartCard.appendChild(el('div', { class: 'text-xs font-semibold text-slate-300 mb-2 border-b border-ink-600 pb-1.5 flex justify-between items-center shrink-0' }, [
-      el('span', {}, r.chart_hint === 'line' ? 'Monthly Trend' : 'District Breakdown'),
+      el('span', {}, r.chart_hint === 'line' ? 'Monthly Trend' : 'Breakdown'),
       el('button', { class: 'text-[10px] text-slate-500 hover:text-slate-300' }, '⋮')
     ]));
     
@@ -627,38 +655,63 @@ function updateDynamicCards(r) {
     chartContent.append(chartContainer, tableContainer);
     chartCard.appendChild(chartContent);
     
-    // Action buttons removed as requested
+    // Add actions under the chart card
+    const actions = el('div', { class: 'flex justify-between mt-2 pt-2 border-t border-ink-600/40 shrink-0' });
+    const btnClass = 'px-3 py-1 rounded bg-ink-700 hover:bg-ink-600 text-[10px] text-slate-200 border border-ink-600 transition font-semibold shadow-sm';
+    
+    const pdfBtn = el('button', { class: btnClass }, 'Export PDF');
+    pdfBtn.addEventListener('click', () => {
+      const globalPdfBtn = document.getElementById('pdfBtn');
+      if (globalPdfBtn) globalPdfBtn.click();
+    });
+    
+    const refineBtn = el('button', { class: btnClass }, 'Refine Query');
+    refineBtn.addEventListener('click', () => {
+      const input = document.getElementById('chatInput');
+      if (input) {
+        input.value = 'Refine: ';
+        input.focus();
+      }
+    });
+    
+    const briefBtn = el('button', { class: btnClass }, 'Save to Briefing');
+    briefBtn.addEventListener('click', () => alert('Saved to briefing successfully!'));
+    
+    actions.append(pdfBtn, refineBtn, briefBtn);
+    chartCard.appendChild(actions);
     
     // Render chart card on the left, table on the right
     container.append(chartCard, tableCard);
     
-    // Initialize Chart.js
+    // Initialize Chart.js safely
     setTimeout(() => {
-      const label = r.columns[0];
-      const value = r.columns[r.columns.length - 1];
-      new Chart(canvas, {
-        type: r.chart_hint,
-        data: {
-          labels: r.rows.map(row => row[label]),
-          datasets: [{
-            label: value,
-            data: r.rows.map(row => row[value]),
-            backgroundColor: '#5b8def',
-            borderColor: '#93c5fd',
-            fill: true,
-            tension: 0.3
-          }],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: { legend: { display: false } },
-          scales: {
-            x: { ticks: { color: '#94a3b8', font: { size: 8 } }, grid: { color: '#1b2230' } },
-            y: { ticks: { color: '#94a3b8', font: { size: 8 } }, grid: { color: '#1b2230' } },
+      try {
+        new Chart(canvas, {
+          type: r.chart_hint === 'line' ? 'line' : 'bar',
+          data: {
+            labels: r.rows.map(row => String(tVal(row[labelCol]) ?? '')),
+            datasets: [{
+              label: valCol,
+              data: r.rows.map(row => Number(row[valCol]) || 0),
+              backgroundColor: '#5b8def',
+              borderColor: '#93c5fd',
+              fill: true,
+              tension: 0.3
+            }],
           },
-        },
-      });
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: '#94a3b8', font: { size: 8 } }, grid: { color: '#1b2230' } },
+              y: { ticks: { color: '#94a3b8', font: { size: 8 } }, grid: { color: '#1b2230' } },
+            },
+          },
+        });
+      } catch (e) {
+        console.error('Chart error:', e);
+      }
     }, 0);
   } else {
     container.appendChild(tableCard);
@@ -808,41 +861,53 @@ function addMessage(role, opts) {
       chatLog.appendChild(wrap2);
     }
   } else {
-    // Bot message
+    // Bot message — show primary language first based on detected language
     const enText = opts.prefix_en || opts.prefix || '';
     const knText = opts.prefix_kn || '';
+    const detectedLang = opts.detectedLang || 'en';
+    const isKnPrimary = detectedLang === 'kn';
 
-    // 1. English bot bubble (left-aligned, with avatar)
-    if (enText) {
+    // Determine primary/secondary text based on detected language
+    const primaryText = isKnPrimary ? (knText || enText) : enText;
+    const secondaryText = isKnPrimary ? enText : knText;
+    const primaryClass = isKnPrimary ? kannadaBubbleClass : englishBubbleClass;
+    const secondaryClass = isKnPrimary ? englishBubbleClass : kannadaBubbleClass;
+    const primaryLabel = isKnPrimary ? '(ಕನ್ನಡ)' : '(English)';
+    const secondaryLabel = isKnPrimary ? '(English)' : '(Kannada)';
+    const primarySpeakTitle = isKnPrimary ? 'ಓದಿ' : 'Speak English';
+    const secondarySpeakTitle = isKnPrimary ? 'Speak English' : 'ಓದಿ';
+
+    // 1. Primary bot bubble (left-aligned, with avatar)
+    if (primaryText) {
       const wrap1 = el('div', { class: 'flex w-full mb-3 items-start justify-start' });
       const avatar = el('div', { class: botAvatarClass }, 'AI');
-      const bubble1 = el('div', { class: englishBubbleClass }, enText);
-      const label1 = el('span', { class: 'text-[9px] text-slate-500 ml-2 mt-3.5 shrink-0 select-none' }, '(English)');
+      const bubble1 = el('div', { class: primaryClass }, primaryText);
+      const label1 = el('span', { class: 'text-[9px] text-slate-500 ml-2 mt-3.5 shrink-0 select-none' }, primaryLabel);
       
       // Speak button under bot bubble
       const speakBtn = el('button', {
-        class: 'mt-2 block px-2 py-0.5 rounded bg-ink-700 hover:bg-ink-600 border border-ink-600 text-[10px] text-slate-300 transition font-semibold',
-        title: 'Speak English'
+        class: 'mt-2 block px-2 py-0.5 rounded bg-ink-700 hover:bg-ink-600 border border-ink-600 text-[10px] text-slate-300 transition font-semibold' + (isKnPrimary ? ' kn' : ''),
+        title: primarySpeakTitle
       }, '🔊 Speak');
-      speakBtn.addEventListener('click', () => speak(enText));
+      speakBtn.addEventListener('click', () => speak(primaryText));
       bubble1.appendChild(speakBtn);
 
       wrap1.append(avatar, bubble1, label1);
       chatLog.appendChild(wrap1);
     }
 
-    // 2. Kannada bot bubble (right-aligned, no avatar)
-    if (knText) {
+    // 2. Secondary bot bubble (right-aligned, no avatar)
+    if (secondaryText && secondaryText !== primaryText) {
       const wrap2 = el('div', { class: 'flex w-full mb-3 items-start justify-end pr-2' });
-      const label2 = el('span', { class: 'text-[9px] text-slate-500 mr-2 mt-3.5 shrink-0 select-none' }, '(Kannada)');
-      const bubble2 = el('div', { class: kannadaBubbleClass }, knText);
+      const label2 = el('span', { class: 'text-[9px] text-slate-500 mr-2 mt-3.5 shrink-0 select-none' }, secondaryLabel);
+      const bubble2 = el('div', { class: secondaryClass }, secondaryText);
       
       // Speak button under bot bubble
       const speakBtn = el('button', {
-        class: 'mt-2 block px-2 py-0.5 rounded bg-ink-750 hover:bg-ink-700 border border-teal-800/40 text-[10px] text-slate-300 transition font-semibold kn',
-        title: 'ಓದಿ'
+        class: 'mt-2 block px-2 py-0.5 rounded bg-ink-750 hover:bg-ink-700 border border-teal-800/40 text-[10px] text-slate-300 transition font-semibold' + (isKnPrimary ? '' : ' kn'),
+        title: secondarySpeakTitle
       }, '🔊 Speak');
-      speakBtn.addEventListener('click', () => speak(knText));
+      speakBtn.addEventListener('click', () => speak(secondaryText));
       bubble2.appendChild(speakBtn);
 
       wrap2.append(label2, bubble2);
@@ -854,6 +919,11 @@ function addMessage(role, opts) {
 }
 
 function renderTable(columns, rows) {
+  columns = columns || [];
+  rows = rows || [];
+  if (!columns.length && rows.length) {
+    columns = Object.keys(rows[0] || {});
+  }
   const table = el('table', { class: 'data w-full' });
   // data-key / data-raw hold the original English so applyI18n can
   // retranslate already-rendered tables when the language flips.
@@ -872,6 +942,7 @@ function renderTable(columns, rows) {
   }
   return table;
 }
+
 
 function renderInlineChart(columns, rows, type) {
   // Retained as a fallback placeholder if needed elsewhere
@@ -1031,17 +1102,42 @@ async function sendChat() {
       persistSession();
     }
     loadConversationsList();
+
+    // Build prefix with result count
+    let prefixEn = r.answer_prefix_en || '';
+    let prefixKn = r.answer_prefix_kn || '';
+    const rowCount = (r.rows && r.rows.length) || 0;
+    if (r.sql && rowCount > 0) {
+      prefixEn += ` (${rowCount} result${rowCount !== 1 ? 's' : ''})`;
+      if (prefixKn) prefixKn += ` (${rowCount} ಫಲಿತಾಂಶ${rowCount !== 1 ? 'ಗಳು' : ''})`;
+    } else if (r.sql && rowCount === 0) {
+      prefixEn += ' (0 results — your scope may restrict visible data)';
+      if (prefixKn) prefixKn += ' (0 ಫಲಿತಾಂಶ — ನಿಮ್ಮ ವ್ಯಾಪ್ತಿ ಮಿತಿ)';
+    }
     
     addMessage('bot', {
-      prefix_en: r.answer_prefix_en,
-      prefix_kn: r.answer_prefix_kn,
+      prefix_en: prefixEn,
+      prefix_kn: prefixKn,
+      detectedLang: r.language || 'en',
     });
+
+    // Render inline table in chat if we have rows
+    if (rowCount > 0) {
+      const columns = r.columns && r.columns.length ? r.columns : Object.keys(r.rows[0] || {});
+      const inlineWrap = el('div', { class: 'flex w-full mb-3 items-start justify-start pl-11' });
+      const inlineCard = el('div', { class: 'bg-ink-800 border border-ink-600 rounded-xl p-3 max-w-[90%] overflow-auto text-xs max-h-[200px]' });
+      inlineCard.appendChild(renderTable(columns, r.rows));
+      inlineWrap.appendChild(inlineCard);
+      $('#chatLog').appendChild(inlineWrap);
+      $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
+    }
     
     // Update the bottom panel dynamic cards with result
     updateDynamicCards(r);
     
-    const prefix = state.lang === 'kn' && r.answer_prefix_kn
-      ? r.answer_prefix_kn : r.answer_prefix_en;
+    const isKnResponse = (r.language || 'en') === 'kn';
+    const prefix = isKnResponse && prefixKn
+      ? prefixKn : prefixEn;
       
     state.history.push({
       role: 'assistant',
@@ -1069,6 +1165,7 @@ async function sendChat() {
     }
   }
 }
+
 
 // ---------------------------------------------------------------- voice
 // Two paths, picked at click time:
@@ -1180,22 +1277,32 @@ async function speakViaServer(text, lang) {
 async function speak(text) {
   if (!state.ttsEnabled || !text) return;
   const isKn = /[\u0C80-\u0CFF]/.test(text);
-  const lang = isKn ? 'kn' : 'en';
+  // Send full BCP-47 locale to the server — Sarvam/Google TTS need 'kn-IN',
+  // not just 'kn', otherwise the lang.endsWith("-IN") check falls back to en-IN.
+  const lang = isKn ? 'kn-IN' : 'en-IN';
 
   const played = await speakViaServer(text, lang);
   if (played) return;
 
+  // Browser speechSynthesis fallback — select an explicit voice matching
+  // the target language when available (Windows rarely ships kn-IN).
   if ('speechSynthesis' in window) {
     try {
       window.speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
-      u.lang = isKn ? 'kn-IN' : 'en-IN';
+      u.lang = lang;
+      // Try to find a matching voice explicitly
+      const voices = window.speechSynthesis.getVoices();
+      const match = voices.find(v => v.lang === lang)
+                 || voices.find(v => v.lang.startsWith(isKn ? 'kn' : 'en'));
+      if (match) u.voice = match;
       window.speechSynthesis.speak(u);
     } catch (e) {
       console.error('TTS error:', e);
     }
   }
 }
+
 
 // ---------------------------------------------------------------- hotspots
 let hotspotMap = null;
@@ -2803,22 +2910,26 @@ async function downloadWeeklyReport(btn) {
 }
 
 // ---------------------------------------------------------------- audit
+// ---------------------------------------------------------------- audit
 async function loadAudit(firFilter) {
   try {
     const path = firFilter
       ? `/audit/fir/${encodeURIComponent(firFilter)}` : '/audit';
     const r = await api(path);
+    state.lastAuditEntries = r.entries || [];
     const body = $('#auditBody');
     body.innerHTML = '';
+    
     if (firFilter) {
-      body.appendChild(el('div', { class: 'text-xs text-slate-400 mb-3' },
+      body.appendChild(el('div', { class: 'text-xs text-slate-400 mb-4' },
         `${r.entries.length} audit entr${r.entries.length === 1 ? 'y' : 'ies'} touching "${firFilter}"`));
+      
       // Case linkage: related FIRs by shared-evidence score, with reasons.
       try {
         const lk = await api(`/case/${encodeURIComponent(firFilter)}/linked`);
         if (lk.linked?.length) {
           body.appendChild(el('h3',
-            { class: 'text-xs uppercase tracking-wider text-slate-400 mb-2' },
+            { class: 'text-xs uppercase tracking-wider text-slate-400 mb-2 font-bold' },
             `Linked cases (${lk.linked.length})`));
           const box = el('div', { class: 'space-y-2 mb-5' });
           for (const c of lk.linked) {
@@ -2838,12 +2949,256 @@ async function loadAudit(firFilter) {
         }
       } catch {} // 404/403 → no linkage section, audit rows still shown
     }
-    const columns = ['timestamp', 'user_id', 'role', 'action', 'query', 'result_summary'];
-    body.appendChild(renderTable(columns, r.entries));
+    
+    body.appendChild(renderAuditTable(r.entries));
   } catch (e) {
-    $('#auditBody').innerHTML = `<div class="text-amber-400">${e.message}</div>`;
+    $('#auditBody').innerHTML = `<div class="text-amber-400 font-semibold p-4 bg-amber-950/20 border border-amber-900/40 rounded-lg">${e.message}</div>`;
   }
 }
+
+function formatAuditTimestamp(ts) {
+  if (!ts) return '—';
+  try {
+    const clean = ts.replace('T', ' ').split('.')[0];
+    if (clean.endsWith('Z')) return clean.replace('Z', '');
+    return clean;
+  } catch {
+    return ts;
+  }
+}
+
+function formatAuditAction(action) {
+  if (!action) return 'Action';
+  const names = {
+    'chat': 'Chat Query',
+    'predict': 'Crime Forecast',
+    'trends': 'Crime Trends',
+    'trends_dashboard': 'Trends Dashboard',
+    'audit_view': 'Audit Log View',
+    'audit_fir_view': 'FIR Audit Lookup',
+    'login': 'User Login',
+    'logout': 'User Logout',
+    'network': 'Network Graph',
+    'patrol': 'Patrol Route',
+    'weekly_report': 'Weekly Report',
+    'demographics': 'Demographics',
+    'demographics_overview': 'Demographics Overview',
+    'repeat_offenders': 'Repeat Offenders',
+    'chargesheet_rate': 'Chargesheet Analytics',
+    'jobs_refresh': 'Jobs Refresh',
+    'datastore_sync': 'DataStore Sync',
+    'export_pdf': 'PDF Export',
+    'feedback': 'Officer Feedback'
+  };
+  if (names[action]) return names[action];
+  return action.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+}
+
+function formatAuditQuery(rawQuery, action) {
+  if (!rawQuery || rawQuery === '—' || rawQuery.trim() === '') {
+    const actionDefaults = {
+      'predict': 'Crime Forecasting & Early Warning Analysis',
+      'audit_view': 'System Audit Log Inspection',
+      'audit_fir_view': 'FIR Audit History Lookup',
+      'login': 'User Authentication',
+      'logout': 'User Session Termination',
+      'trends': 'Statewide Crime Trends Analysis',
+      'trends_dashboard': 'All Districts & Units Overview',
+      'network': 'Accused Network Relationship Graph',
+      'patrol': 'Patrol Route Optimization',
+      'weekly_report': 'District Weekly Performance Summary',
+      'demographics': 'Demographic Crime Distribution',
+      'demographics_overview': 'Statewide Demographics Overview',
+      'repeat_offenders': 'Repeat Offenders Registry Query',
+      'chargesheet_rate': 'Chargesheet Rate Analytics',
+      'jobs_refresh': 'Background Jobs Refresh',
+      'datastore_sync': 'Cloud DataStore Sync',
+      'export_pdf': 'PDF Report Export',
+      'feedback': 'Officer Feedback Submission'
+    };
+    return actionDefaults[action] || 'System Request';
+  }
+
+  // Handle parameter strings like d:None|u:None|c:None or t:Cyber|s:High|p:P1
+  if (rawQuery.includes(':') && (rawQuery.includes('|') || rawQuery.includes('None'))) {
+    const parts = rawQuery.split('|').map(p => p.trim());
+    const validParts = [];
+    parts.forEach(p => {
+      const [key, val] = p.split(':');
+      if (val && val !== 'None' && val !== 'null' && val !== '' && val !== 'undefined') {
+        const keyMap = { d: 'District', u: 'Unit', c: 'Category', t: 'Type', s: 'Severity', p: 'Priority' };
+        validParts.push(`${keyMap[key] || key}: ${val}`);
+      }
+    });
+    if (validParts.length > 0) {
+      return validParts.join(' • ');
+    } else {
+      return 'All Data Filters (Global Overview)';
+    }
+  }
+
+  return rawQuery;
+}
+
+function renderAuditTable(entries) {
+  if (!entries || !entries.length) {
+    return el('div', { class: 'text-center py-10 text-slate-500 italic text-xs' }, 'No audit logs found.');
+  }
+
+  // Create responsive wrapper
+  const wrapper = el('div', { class: 'overflow-x-auto rounded-xl border border-ink-600/40 bg-ink-900/20 shadow-sm' });
+  const table = el('table', { class: 'w-full text-xs text-slate-300 border-collapse' });
+  
+  // Table Headers
+  const thead = el('thead', { class: 'text-slate-400 text-left bg-ink-900/50 border-b border-ink-600/40' }, el('tr', {}, [
+    el('th', { class: 'py-3.5 px-4 font-bold uppercase tracking-wider text-[10px]' }, 'Timestamp'),
+    el('th', { class: 'py-3.5 px-4 font-bold uppercase tracking-wider text-[10px]' }, 'USER_ID'),
+    el('th', { class: 'py-3.5 px-4 font-bold uppercase tracking-wider text-[10px]' }, 'Role'),
+    el('th', { class: 'py-3.5 px-4 font-bold uppercase tracking-wider text-[10px]' }, 'Action'),
+    el('th', { class: 'py-3.5 px-4 font-bold uppercase tracking-wider text-[10px]' }, 'Query'),
+    el('th', { class: 'py-3.5 px-4 font-bold uppercase tracking-wider text-[10px]' }, 'Result Summary'),
+    el('th', { class: 'py-3.5 px-4 font-bold uppercase tracking-wider text-[10px] w-12 text-center' }, '')
+  ]));
+
+  const tbody = el('tbody', { class: 'divide-y divide-ink-600/20' }, entries.map(r => {
+    // 1. Timestamp formatted nicely (date on top, time below)
+    const tsParts = (formatAuditTimestamp(r.timestamp) || '—').split(' ');
+    const datePart = tsParts[0] || '—';
+    const timePart = tsParts[1] || '';
+    const tsCell = el('td', { class: 'py-3 px-4 font-mono text-slate-400 text-[11px] whitespace-nowrap' }, [
+      el('div', { class: 'text-slate-300 font-medium' }, datePart),
+      timePart ? el('div', { class: 'text-[10px] text-slate-500 mt-0.5' }, timePart) : null
+    ].filter(Boolean));
+
+    // 2. User ID cell with icon (single line)
+    const userCell = el('td', { class: 'py-3 px-4 font-semibold text-slate-200 text-xs whitespace-nowrap' }, [
+      el('span', { class: 'mr-1.5 opacity-60 text-slate-400' }, '👤'),
+      el('span', {}, String(r.user_id || '—'))
+    ]);
+
+    // 3. Role badge cell
+    let roleClass = 'bg-slate-500/10 border-slate-500/30 text-slate-400';
+    if (r.role === 'admin') roleClass = 'bg-blue-500/10 border-blue-500/30 text-blue-400';
+    else if (r.role === 'dysp') roleClass = 'bg-purple-500/10 border-purple-500/30 text-purple-400';
+    else if (r.role === 'sho') roleClass = 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400';
+    else if (r.role === 'io') roleClass = 'bg-teal-500/10 border-teal-500/30 text-teal-400';
+    else if (r.role === 'analyst') roleClass = 'bg-amber-500/10 border-amber-500/30 text-amber-400';
+
+    const roleCell = el('td', { class: 'py-3 px-4' }, 
+      el('span', { class: `inline-block px-2 py-0.5 rounded border text-[9px] font-bold uppercase tracking-wider ${roleClass}` }, String(r.role || '—'))
+    );
+
+    // 4. Action cell with icon & title-case formatting
+    let actionIcon = '⚙️';
+    if (r.action === 'chat') actionIcon = '💬';
+    else if (r.action === 'predict') actionIcon = '📈';
+    else if (r.action === 'login') actionIcon = '🔑';
+    else if (r.action === 'logout') actionIcon = '🚪';
+    else if (r.action === 'audit_view' || r.action === 'audit_fir_view') actionIcon = '👁️';
+    else if (r.action === 'trends_dashboard' || r.action === 'trends') actionIcon = '📊';
+
+    const formattedAction = formatAuditAction(r.action);
+    const actionCell = el('td', { class: 'py-3 px-4 font-semibold text-slate-200 text-xs whitespace-nowrap' }, [
+      el('span', { class: 'mr-1.5 opacity-70' }, actionIcon),
+      el('span', {}, formattedAction)
+    ]);
+
+    // 5. Query cell formatted nicely
+    const formattedQuery = formatAuditQuery(r.query, r.action);
+    const queryCell = el('td', { class: 'py-3 px-4 max-w-sm truncate text-slate-300 font-medium text-xs', title: formattedQuery }, formattedQuery);
+
+    // 6. Result Summary cell with colored status dot
+    let dotClass = 'bg-emerald-500';
+    const summary = String(r.result_summary || '');
+    if (summary.includes('fallback') || summary.includes('warning')) {
+      dotClass = 'bg-amber-500';
+    } else if (summary.includes('failed') || summary.includes('error') || summary.includes('denied')) {
+      dotClass = 'bg-rose-500';
+    }
+
+    const summaryCell = el('td', { class: 'py-3 px-4 flex items-center font-medium text-xs text-slate-300' }, [
+      el('span', { class: `inline-block w-1.5 h-1.5 rounded-full mr-2 shrink-0 ${dotClass}` }),
+      el('span', { class: 'truncate' }, summary)
+    ]);
+
+    // 7. Action Button `...` cell
+    const actionMenuBtn = el('button', { class: 'px-2 py-1 hover:bg-ink-700/60 rounded text-slate-400 hover:text-slate-200 transition font-bold leading-none select-none' }, '•••');
+    
+    actionMenuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Remove any existing dropdowns
+      document.querySelectorAll('.audit-action-dropdown').forEach(d => d.remove());
+      
+      const dropdown = el('div', { class: 'audit-action-dropdown absolute right-4 mt-1 bg-ink-800 border border-ink-600/85 rounded-lg shadow-xl py-1 w-44 z-50 text-left text-xs font-semibold' }, [
+        el('button', { class: 'w-full px-4 py-2 hover:bg-ink-700/60 text-slate-300 hover:text-white text-left flex items-center gap-2', onclick: (ev) => {
+          ev.stopPropagation();
+          alert(`User Details:\nUser ID: ${r.user_id}\nRole: ${r.role}\nActive Session: Yes`);
+          dropdown.remove();
+        }}, [
+          el('span', {}, '👤'),
+          el('span', {}, 'View User Details')
+        ]),
+        el('button', { class: 'w-full px-4 py-2 hover:bg-ink-700/60 text-slate-300 hover:text-white text-left flex items-center gap-2', onclick: (ev) => {
+          ev.stopPropagation();
+          $('#auditFir').value = r.user_id;
+          loadAudit(r.user_id);
+          dropdown.remove();
+        }}, [
+          el('span', {}, '🔍'),
+          el('span', {}, 'View Related Logs')
+        ])
+      ]);
+
+      actionMenuBtn.appendChild(dropdown);
+    });
+
+    const actionCellBtn = el('td', { class: 'py-3 px-4 text-center relative' }, actionMenuBtn);
+
+    return el('tr', { class: 'hover:bg-ink-900/40 border-b border-ink-600/10 last:border-0' }, [
+      tsCell,
+      userCell,
+      roleCell,
+      actionCell,
+      queryCell,
+      summaryCell,
+      actionCellBtn
+    ]);
+  }));
+
+  table.appendChild(thead);
+  table.appendChild(tbody);
+  wrapper.appendChild(table);
+  return wrapper;
+}
+
+function exportAuditLogs() {
+  const entries = state.lastAuditEntries;
+  if (!entries || !entries.length) {
+    alert('No audit logs available to export.');
+    return;
+  }
+  const headers = ['Timestamp', 'USER_ID', 'Role', 'Action', 'Query', 'SQL', 'Result Summary'];
+  const csvRows = [headers.join(',')];
+  for (const r of entries) {
+    const values = [
+      r.timestamp || '',
+      r.user_id || '',
+      r.role || '',
+      r.action || '',
+      `"${(r.query || '').replace(/"/g, '""')}"`,
+      `"${(r.sql || '').replace(/"/g, '""')}"`,
+      `"${(r.result_summary || '').replace(/"/g, '""')}"`
+    ];
+    csvRows.push(values.join(','));
+  }
+  const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `ksp-audit-logs-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 
 // ---------------------------------------------------------------- PDF export
 // Server-side first (Catalyst SmartBrowz — proper fonts incl. Kannada, and a
@@ -3621,11 +3976,28 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
   }
-  $('#auditFirBtn').addEventListener('click',
-    () => loadAudit($('#auditFir').value.trim()));
-  $('#auditAllBtn').addEventListener('click', () => {
-    $('#auditFir').value = ''; loadAudit();
-  });
+  const auditFirBtn = $('#auditFirBtn');
+  if (auditFirBtn) {
+    auditFirBtn.addEventListener('click', () => loadAudit($('#auditFir').value.trim()));
+  }
+  const auditAllBtn = $('#auditAllBtn');
+  if (auditAllBtn) {
+    auditAllBtn.addEventListener('click', () => {
+      $('#auditFir').value = ''; loadAudit();
+    });
+  }
+  const auditRefreshBtn = $('#auditRefreshBtn');
+  if (auditRefreshBtn) {
+    auditRefreshBtn.addEventListener('click', () => {
+      loadAudit($('#auditFir').value.trim());
+    });
+  }
+  const auditExportBtn = $('#auditExportBtn');
+  if (auditExportBtn) {
+    auditExportBtn.addEventListener('click', () => {
+      exportAuditLogs();
+    });
+  }
   // Restore saved language (if any) BEFORE any UI text is rendered.
   try {
     const saved = JSON.parse(sessionStorage.getItem('ksp') || 'null');

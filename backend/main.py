@@ -72,7 +72,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(Path(__file__).parent / ".env", override=True)
 
 import sqlglot  # noqa: E402
 from sqlglot import exp  # noqa: E402
@@ -83,6 +83,8 @@ import jobs  # noqa: E402
 from db import cursor, init_schema, read_cursor  # noqa: E402
 import llm  # noqa: E402
 from llm import ChatTurn, is_safe_sql, nl_to_sql  # noqa: E402
+llm.clear_cooldowns()
+
 from seed import seed  # noqa: E402
 
 # Force reload after hotspots filter listeners integration
@@ -93,6 +95,45 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/admin/reseed")
+def admin_reseed():
+    tables = [
+        "PersonAlias", "inv_arrestsurrenderaccused", "ArrestSurrender", "ChargesheetDetails",
+        "ActSectionAssociation", "Accused", "Victim", "ComplainantDetails", "CaseMaster",
+        "Court", "OccupationMaster", "ReligionMaster", "CasteMaster", "CaseStatusMaster",
+        "GravityOffence", "CaseCategory", "CrimeHeadActSection", "CrimeSubHead", "CrimeHead",
+        "Section", "Act", "Employee", "Designation", "Rank", "Unit", "UnitType", "DistrictGeo",
+        "District", "State"
+    ]
+    with cursor() as conn:
+        conn.execute("PRAGMA foreign_keys = OFF;")
+        for tbl in tables:
+            try:
+                conn.execute(f"DELETE FROM {tbl};")
+            except Exception:
+                pass
+        conn.execute("PRAGMA foreign_keys = ON;")
+    seed(n_cases=5000)
+    return {"status": "ok", "message": "Successfully reseeded with 5000 cases"}
+
+
+@app.get("/admin/check_db")
+def admin_check_db():
+    res = {}
+    with cursor() as conn:
+        for tbl in ["CaseMaster", "District", "Employee", "PersonAlias"]:
+            try:
+                n = conn.execute(f"SELECT COUNT(*) AS n FROM {tbl}").fetchone()["n"]
+                res[tbl] = n
+            except Exception as e:
+                res[tbl] = f"error: {str(e)}"
+    return res
+
+
+
+
 
 
 # ============================================================
@@ -1494,19 +1535,23 @@ def get_case_linked(crime_no: str, request: Request,
 # ============================================================
 @app.get("/health")
 def health(request: Request) -> dict:
+    from db import DB_PATH
+    import os
     with cursor() as conn:
         n = conn.execute(
             "SELECT COUNT(*) AS n FROM CaseMaster"
         ).fetchone()["n"]
     services = catalyst.service_status(request)
-    # Which hosted LLMs are configured (ids only — never keys). The chain
-    # rotates through these on 429/quota before the keyword fallback.
     services["llm_providers"] = llm.configured_providers()
     return {
         "ok": True,
         "cases": n,
+        "db_path": str(DB_PATH.resolve()),
+        "db_exists": DB_PATH.exists(),
+        "db_size": os.path.getsize(DB_PATH) if DB_PATH.exists() else 0,
         "services": services,
     }
+
 
 
 # ============================================================

@@ -5,6 +5,29 @@ __pycache__/
 .venv/
 venv/
 .env
+backend/env
+env
+
+# Data — never commit
+*.db
+backend/audit.log
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.claude/
+
+# Debug logs
+catalyst-debug.log
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
 
 # Data — never commit
 *.db
