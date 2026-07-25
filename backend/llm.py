@@ -125,22 +125,44 @@ Rules:
 2. SQL MUST be a single SELECT (no INSERT/UPDATE/DELETE/DDL, no ';').
 3. Always add LIMIT 200 unless the question is an aggregate.
 3b. District.DistrictName values are EXACTLY these 15 — always map
-    colloquial/anglicized names to them before filtering:
+    colloquial/anglicized/Kannada names to them before filtering:
       Bengaluru Urban, Bengaluru Rural, Mysuru, Mangaluru,
       Hubballi-Dharwad, Belagavi, Kalaburagi, Ballari, Vijayapura,
       Shivamogga, Tumakuru, Davanagere, Udupi, Chitradurga, Raichur
-    Mappings: Bangalore/Bengaluru → 'Bengaluru Urban' (add 'Bengaluru
-    Rural' too if the user means the metro region); Mysore → Mysuru;
-    Mangalore → Mangaluru; Hubli/Dharwad → Hubballi-Dharwad;
-    Gulbarga → Kalaburagi; Bellary → Ballari; Bijapur → Vijayapura;
-    Shimoga → Shivamogga; Tumkur → Tumakuru; Belgaum → Belagavi.
+    Mappings:
+      Bangalore/Bengaluru/ಬೆಂಗಳೂರು → 'Bengaluru Urban' (add 'Bengaluru Rural' too if metro);
+      Mysore/Mysuru/ಮೈಸೂರು → Mysuru;
+      Mangalore/Mangaluru/ಮಂಗಳೂರು → Mangaluru;
+      Hubli/Dharwad/Hubballi/ಹುಬ್ಬಳ್ಳಿ/ಧಾರವಾಡ → Hubballi-Dharwad;
+      Gulbarga/Kalaburagi/ಕಲಬುರಗಿ → Kalaburagi;
+      Bellary/Ballari/ಬಳ್ಳಾರಿ → Ballari;
+      Bijapur/Vijayapura/ವಿಜಯಪುರ → Vijayapura;
+      Shimoga/Shivamogga/ಶಿವಮೊಗ್ಗ → Shivamogga;
+      Tumkur/Tumakuru/ತುಮಕೂರು → Tumakuru;
+      Belgaum/Belagavi/ಬೆಳಗಾವಿ → Belagavi;
+      Udupi/ಉಡುಪಿ → Udupi; Chitradurga/ಚಿತ್ರದುರ್ಗ → Chitradurga; Raichur/ರಾಯಚೂರು → Raichur.
     Never emit a district literal outside this list.
+3c. Kannada Queries & Vocabulary Mapping:
+    - User questions may be written in Kannada script (e.g. 'ಬೆಂಗಳೂರಿನಲ್ಲಿ ಎಷ್ಟು ಕೊಲೆ ಪ್ರಕರಣಗಳು?', 'ಯಾವ ಜಿಲ್ಲೆಯಲ್ಲಿ ಅತಿ ಹೆಚ್ಚು ಅಪರಾಧಗಳಿವೆ?', 'ಸೈಬರ್ ಅಪರಾಧಗಳ ಪಟ್ಟಿ').
+    - Translate Kannada terms to schema entities:
+      കൊലെ / ಕೊಲೆ / ಹತ್ಯೆ → Murder / IPC 302
+      ಸೈಬರ್ / ಆನ್‌ಲೈನ್ → Cyber Crimes
+      ಕಳ್ಳತನ / ದರೋಡೆ / ಮನೆ ಕಳ್ಳತನ → Theft / Robbery / Burglary
+      ಅಪರಾಧಗಳು / ಪ್ರಕರಣಗಳು / ಎಫ್‌ಐಆರ್ → Cases / CaseMaster
+      ಠಾಣೆ / ಪೋಲೀಸ್ ಠಾಣೆ / ಪ್ರದೇಶ → Unit (Police Station)
+      ಜಿಲ್ಲೆ / ಜಿಲ್ಲೆಗಳು → District
+      ಪುನರಾವರ್ತಿತ ಅಪರಾಧಿ → Repeat offenders (PersonAlias)
+      ಮಾದಕ ವಸ್ತು / ಗಾಂಜಾ → NDPS
+      ಮಹಿಳೆ / ವರದಕ್ಷಿಣೆ / ಅತ್ಯಾಚಾರ → Crimes against women
+    - Set "language": "kn" whenever the input query is in Kannada.
+    - ALWAYS populate both explanation_kn and answer_prefix_kn in fluent, natural Kannada.
+
 4. Never SELECT columns from ComplainantDetails, Victim, or Accused unless
    the query is an aggregate (COUNT/GROUP BY). Row-level projections of
    caste_master_name / ReligionName / OccupationName are forbidden — those
    are sensitive demographic fields.
-5. For "hotspot" / "top district" style questions → chart_hint="bar", group
-   by District.DistrictName.
+5. For "hotspot" / "top district" style questions across districts → chart_hint="bar", group by District.DistrictName.
+5b. For "which areas" / "police station" / "sub-district" hotspot questions within a specific city or district (e.g. 'which areas in Bangalore have the most murder cases'), filter by that district (e.g. `District.DistrictName IN ('Bengaluru Urban', 'Bengaluru Rural')`), join `Unit u ON u.UnitID = c.PoliceStationID`, group by `u.UnitName` (and `d.DistrictName`), count cases (`COUNT(c.CaseMasterID) AS cases`), order by `cases DESC`, and set `chart_hint="bar"`.
 6. For "trend over time" / "monthly" → chart_hint="line", group by
    strftime('%Y-%m', c.CrimeRegisteredDate) and CrimeHead.CrimeGroupName.
 7. For "co-accused" / "network" / "gang" → chart_hint="network"; return
@@ -408,6 +430,135 @@ def _fallback(query: str) -> LLMResult:
             used_fallback=True,
         )
 
+    # Location context extraction
+    dist_filter = None
+    dist_label_en = None
+    dist_label_kn = None
+
+    if any(k in q for k in ("bangalore", "bengaluru", "ಬೆಂಗಳೂರು")):
+        dist_filter = "d.DistrictName IN ('Bengaluru Urban', 'Bengaluru Rural')"
+        dist_label_en = "Bengaluru"
+        dist_label_kn = "ಬೆಂಗಳೂರು"
+    elif any(k in q for k in ("mysore", "mysuru", "ಮೈಸೂರು")):
+        dist_filter = "d.DistrictName = 'Mysuru'"
+        dist_label_en = "Mysuru"
+        dist_label_kn = "ಮೈಸೂರು"
+    elif any(k in q for k in ("mangalore", "mangaluru", "ಮಂಗಳೂರು")):
+        dist_filter = "d.DistrictName = 'Mangaluru'"
+        dist_label_en = "Mangaluru"
+        dist_label_kn = "ಮಂಗಳೂರು"
+    elif any(k in q for k in ("hubli", "dharwad", "hubballi", "ಹುಬ್ಬಳ್ಳಿ")):
+        dist_filter = "d.DistrictName = 'Hubballi-Dharwad'"
+        dist_label_en = "Hubballi-Dharwad"
+        dist_label_kn = "ಹುಬ್ಬಳ್ಳಿ-ಧಾರವಾಡ"
+    elif any(k in q for k in ("belagavi", "belgaum", "ಬೆಳಗಾವಿ")):
+        dist_filter = "d.DistrictName = 'Belagavi'"
+        dist_label_en = "Belagavi"
+        dist_label_kn = "ಬೆಳಗಾವಿ"
+    elif any(k in q for k in ("kalaburagi", "gulbarga", "ಕಲಬುರಗಿ")):
+        dist_filter = "d.DistrictName = 'Kalaburagi'"
+        dist_label_en = "Kalaburagi"
+        dist_label_kn = "ಕಲಬುರಗಿ"
+    elif any(k in q for k in ("ballari", "bellary", "ಬಳ್ಳಾರಿ")):
+        dist_filter = "d.DistrictName = 'Ballari'"
+        dist_label_en = "Ballari"
+        dist_label_kn = "ಬಳ್ಳಾರಿ"
+    elif any(k in q for k in ("shivamogga", "shimoga", "ಶಿವಮೊಗ್ಗ")):
+        dist_filter = "d.DistrictName = 'Shivamogga'"
+        dist_label_en = "Shivamogga"
+        dist_label_kn = "ಶಿವಮೊಗ್ಗ"
+    elif any(k in q for k in ("tumakuru", "tumkur", "ತುಮಕೂರು")):
+        dist_filter = "d.DistrictName = 'Tumakuru'"
+        dist_label_en = "Tumakuru"
+        dist_label_kn = "ತುಮಕೂರು"
+    elif any(k in q for k in ("udupi", "ಉಡುಪಿ")):
+        dist_filter = "d.DistrictName = 'Udupi'"
+        dist_label_en = "Udupi"
+        dist_label_kn = "ಉಡುಪಿ"
+    elif any(k in q for k in ("chitradurga", "ಚಿತ್ರದುರ್ಗ")):
+        dist_filter = "d.DistrictName = 'Chitradurga'"
+        dist_label_en = "Chitradurga"
+        dist_label_kn = "ಚಿತ್ರದುರ್ಗ"
+    elif any(k in q for k in ("raichur", "ರಾಯಚೂರು")):
+        dist_filter = "d.DistrictName = 'Raichur'"
+        dist_label_en = "Raichur"
+        dist_label_kn = "ರಾಯಚೂರು"
+
+    # Aggregation vs Raw List intent
+    is_ranking = any(k in q for k in (
+        "most", "highest", "top", "which area", "which station", "which police station",
+        "which district", "number of", "count", "volume", "hotspot", "pradesh",
+        "detection rate", "solved rate", "clearance", "best", "worst",
+        "ಪ್ರದೇಶ", "ಅಗ್ರ", "ಹೆಚ್ಚು", "ಯಾವ"
+    ))
+
+    # Murder queries
+    if any(k in q for k in ("murder", "ipc 302", "heinous", "ಕೊಲೆ")):
+        where_conds = ["asa.ActID = 'IPC'", "asa.SectionID = '302'"]
+        if dist_filter:
+            where_conds.append(dist_filter)
+        where_sql = "WHERE " + " AND ".join(where_conds)
+
+        loc_suffix_en = f" in {dist_label_en}" if dist_label_en else ""
+        loc_prefix_kn = f"{dist_label_kn}ಯಲ್ಲಿ " if dist_label_kn else ""
+
+        if is_ranking or "area" in q or "station" in q:
+            sql = (
+                "SELECT u.UnitName AS area, d.DistrictName AS district, "
+                "       COUNT(c.CaseMasterID) AS murder_cases "
+                "FROM CaseMaster c "
+                "JOIN Unit u ON u.UnitID = c.PoliceStationID "
+                "JOIN District d ON d.DistrictID = u.DistrictID "
+                "JOIN ActSectionAssociation asa ON asa.CaseMasterID = c.CaseMasterID "
+                f"{where_sql} "
+                "GROUP BY u.UnitName, d.DistrictName "
+                "ORDER BY murder_cases DESC LIMIT 15"
+            )
+            return _fb(is_kn, sql,
+                       f"Murder cases aggregated by police station area{loc_suffix_en}.",
+                       f"{loc_prefix_kn}ಪೋಲಿಸ್ ಠಾಣೆ ಪ್ರದೇಶವಾರು ಕೊಲೆ ಪ್ರಕರಣಗಳ ಎಣಿಕೆ.",
+                       "bar",
+                       f"Top police station areas{loc_suffix_en} by murder cases:",
+                       f"ಕೊಲೆ ಪ್ರಕರಣಗಳ ಸಂಖ್ಯೆಯ ಪ್ರಕಾರ ಅಗ್ರ ಪ್ರದೇಶಗಳು ({dist_label_kn or 'ಕರ್ನಾಟಕ'}):")
+        else:
+            sql = (
+                "SELECT c.CrimeNo AS crime_no, u.UnitName AS station, d.DistrictName AS district, "
+                "       csh.CrimeHeadName AS subhead, c.CrimeRegisteredDate AS date, "
+                "       csm.CaseStatusName AS status "
+                "FROM CaseMaster c "
+                "JOIN CrimeSubHead csh ON csh.CrimeSubHeadID = c.CrimeMinorHeadID "
+                "JOIN Unit u ON u.UnitID = c.PoliceStationID "
+                "JOIN District d ON d.DistrictID = u.DistrictID "
+                "JOIN CaseStatusMaster csm ON csm.CaseStatusID = c.CaseStatusID "
+                "JOIN ActSectionAssociation asa ON asa.CaseMasterID = c.CaseMasterID "
+                f"{where_sql} "
+                "ORDER BY c.CrimeRegisteredDate DESC LIMIT 25"
+            )
+            return _fb(is_kn, sql,
+                       f"Cases invoked under IPC 302 (murder){loc_suffix_en}, most recent first.",
+                       f"{loc_prefix_kn}ಐಪಿಸಿ 302 (ಕೊಲೆ) ಅಡಿಯಲ್ಲಿ ದಾಖಲಾದ ಪ್ರಕರಣಗಳು, ಇತ್ತೀಚಿನವು ಮೊದಲು.",
+                       "table",
+                       f"Recent murder cases{loc_suffix_en}:",
+                       f"ಇತ್ತೀಚಿನ ಕೊಲೆ ಪ್ರಕರಣಗಳು ({dist_label_kn or 'ಕರ್ನಾಟಕ'}):")
+
+    if dist_filter and is_ranking:
+        sql = (
+            "SELECT u.UnitName AS area, d.DistrictName AS district, "
+            "       COUNT(c.CaseMasterID) AS total_cases "
+            "FROM CaseMaster c "
+            "JOIN Unit u ON u.UnitID = c.PoliceStationID "
+            "JOIN District d ON d.DistrictID = u.DistrictID "
+            f"WHERE {dist_filter} "
+            "GROUP BY u.UnitName, d.DistrictName "
+            "ORDER BY total_cases DESC LIMIT 15"
+        )
+        return _fb(is_kn, sql,
+                   f"FIR volume by police station area in {dist_label_en}.",
+                   f"{dist_label_kn}ಯಲ್ಲಿ ಪೊಲೀಸ್ ಠಾಣೆ ಪ್ರದೇಶವಾರು ಎಫ್‌ಐಆರ್ ಸಂಖ್ಯೆ.",
+                   "bar",
+                   f"Top police station areas in {dist_label_en} by crime volume:",
+                   f"{dist_label_kn}ಯಲ್ಲಿ ಎಫ್‌ಐಆರ್ ಸಂಖ್ಯೆಯ ಪ್ರಕಾರ ಅಗ್ರ ಪ್ರದೇಶಗಳು:")
+
     if any(k in q for k in (
         "hotspot", "top district", "most crime", "highest", "which district",
         "ಹಾಟ್", "ಜಿಲ್ಲೆ",
@@ -417,103 +568,14 @@ def _fallback(query: str) -> LLMResult:
             "FROM CaseMaster c "
             "JOIN Unit u ON u.UnitID = c.PoliceStationID "
             "JOIN District d ON d.DistrictID = u.DistrictID "
-            "GROUP BY d.DistrictName ORDER BY crimes DESC LIMIT 10"
+            "GROUP BY d.DistrictName ORDER BY crimes DESC LIMIT 15"
         )
         return _fb(is_kn, sql,
-                   "Group CaseMaster by District, order by count.",
-                   "ಜಿಲ್ಲಾವಾರು ಎಫ್‌ಐಆರ್ ಎಣಿಕೆ, ಹೆಚ್ಚಿನದರಿಂದ ಕಡಿಮೆಗೆ.",
+                   "Districts ranked by total crime volume.",
+                   "ಒಟ್ಟು ಅಪರಾಧಗಳ ಸಂಖ್ಯೆಯ ಪ್ರಕಾರ ಜಿಲ್ಲೆಗಳ ಪಟ್ಟಿ.",
                    "bar",
-                   "Top districts by FIR volume:",
-                   "ಎಫ್‌ಐಆರ್ ಸಂಖ್ಯೆಯ ಪ್ರಕಾರ ಅಗ್ರ ಜಿಲ್ಲೆಗಳು:")
-
-    if any(k in q for k in (
-        "trend", "over time", "monthly", "per month", "line chart", "ಟ್ರೆಂಡ್",
-    )):
-        sql = (
-            "SELECT strftime('%Y-%m', c.CrimeRegisteredDate) AS month, "
-            "ch.CrimeGroupName AS category, COUNT(*) AS crimes "
-            "FROM CaseMaster c "
-            "JOIN CrimeHead ch ON ch.CrimeHeadID = c.CrimeMajorHeadID "
-            "GROUP BY month, category ORDER BY month LIMIT 500"
-        )
-        return _fb(is_kn, sql,
-                   "Monthly volume by crime head category.",
-                   "ಅಪರಾಧ ವರ್ಗದ ಪ್ರಕಾರ ಮಾಸಿಕ ಪ್ರಮಾಣ.",
-                   "line",
-                   "Monthly crime volume by category:",
-                   "ವರ್ಗವಾರು ಮಾಸಿಕ ಅಪರಾಧ ಪ್ರಮಾಣ:")
-
-    if any(k in q for k in (
-        "network", "co-offend", "co-accused", "gang", "associate",
-        "syndicate", "ಸಿಂಡಿಕೇಟ್",
-    )):
-        sql = (
-            "WITH accused_c AS ( "
-            "  SELECT a.AccusedMasterID, a.CaseMasterID, a.AccusedName, "
-            "         COALESCE(pa.ClusterID, -a.AccusedMasterID) AS cluster "
-            "  FROM Accused a "
-            "  LEFT JOIN PersonAlias pa ON pa.AccusedMasterID = a.AccusedMasterID "
-            ") "
-            "SELECT a1.cluster AS a_id, MAX(a1.AccusedName) AS a_name, "
-            "       a2.cluster AS b_id, MAX(a2.AccusedName) AS b_name, "
-            "       COUNT(DISTINCT a1.CaseMasterID) AS shared_cases "
-            "FROM accused_c a1 "
-            "JOIN accused_c a2 ON a1.CaseMasterID = a2.CaseMasterID "
-            "                  AND a1.cluster < a2.cluster "
-            "GROUP BY a1.cluster, a2.cluster "
-            "HAVING shared_cases >= 2 "
-            "ORDER BY shared_cases DESC LIMIT 60"
-        )
-        return _fb(is_kn, sql,
-                   "Co-accused pairs across FIRs (via PersonAlias).",
-                   "ಎಫ್‌ಐಆರ್‌ಗಳಾದ್ಯಂತ ಜೊತೆ-ಆರೋಪಿ ಜೋಡಿಗಳು (PersonAlias ಮೂಲಕ).",
-                   "network",
-                   "Persons who repeatedly co-offend:",
-                   "ಪದೇ ಪದೇ ಜೊತೆಯಾಗಿ ಅಪರಾಧ ಮಾಡುವ ವ್ಯಕ್ತಿಗಳು:")
-
-    if any(k in q for k in (
-        "cyber", "online fraud", "phishing", "ransomware", "identity theft",
-        "ಸೈಬರ್",
-    )):
-        sql = (
-            "SELECT d.DistrictName AS district, "
-            "       COUNT(c.CaseMasterID) AS cyber_cases "
-            "FROM CaseMaster c "
-            "JOIN CrimeHead ch ON ch.CrimeHeadID = c.CrimeMajorHeadID "
-            "JOIN Unit u ON u.UnitID = c.PoliceStationID "
-            "JOIN District d ON d.DistrictID = u.DistrictID "
-            "WHERE ch.CrimeGroupName = 'Cyber Crimes' "
-            "GROUP BY d.DistrictName ORDER BY cyber_cases DESC LIMIT 10"
-        )
-        return _fb(is_kn, sql,
-                   "Cyber crime volume by district.",
-                   "ಜಿಲ್ಲಾವಾರು ಸೈಬರ್ ಅಪರಾಧ ಪ್ರಮಾಣ.",
-                   "bar",
-                   "Cyber cases by district:",
-                   "ಜಿಲ್ಲಾವಾರು ಸೈಬರ್ ಪ್ರಕರಣಗಳು:")
-
-    if any(k in q for k in (
-        "murder", "ipc 302", "heinous", "ಕೊಲೆ",
-    )):
-        sql = (
-            "SELECT c.CrimeNo AS crime_no, d.DistrictName AS district, "
-            "       csh.CrimeHeadName AS subhead, c.CrimeRegisteredDate AS date, "
-            "       csm.CaseStatusName AS status "
-            "FROM CaseMaster c "
-            "JOIN CrimeSubHead csh ON csh.CrimeSubHeadID = c.CrimeMinorHeadID "
-            "JOIN Unit u ON u.UnitID = c.PoliceStationID "
-            "JOIN District d ON d.DistrictID = u.DistrictID "
-            "JOIN CaseStatusMaster csm ON csm.CaseStatusID = c.CaseStatusID "
-            "JOIN ActSectionAssociation asa ON asa.CaseMasterID = c.CaseMasterID "
-            "WHERE asa.ActID = 'IPC' AND asa.SectionID = '302' "
-            "ORDER BY c.CrimeRegisteredDate DESC LIMIT 25"
-        )
-        return _fb(is_kn, sql,
-                   "Cases invoked under IPC 302 (murder), most recent first.",
-                   "ಐಪಿಸಿ 302 (ಕೊಲೆ) ಅಡಿಯಲ್ಲಿ ದಾಖಲಾದ ಪ್ರಕರಣಗಳು, ಇತ್ತೀಚಿನವು ಮೊದಲು.",
-                   "table",
-                   "Recent cases invoked under IPC 302:",
-                   "ಐಪಿಸಿ 302 ಅಡಿಯಲ್ಲಿ ದಾಖಲಾದ ಇತ್ತೀಚಿನ ಪ್ರಕರಣಗಳು:")
+                   "Top districts by crime volume:",
+                   "ಅಪರಾಧಗಳ ಸಂಖ್ಯೆಯ ಪ್ರಕಾರ ಅಗ್ರ ಜಿಲ್ಲೆಗಳು:")
 
     if any(k in q for k in (
         "chargesheet", "conviction rate", "csr", "b report", "undetected",
@@ -534,6 +596,126 @@ def _fallback(query: str) -> LLMResult:
                    "table",
                    "Status vs chargesheet outcome:",
                    "ಸ್ಥಿತಿ ಮತ್ತು ದೋಷಾರೋಪ ಪಟ್ಟಿ ಫಲಿತಾಂಶ:")
+
+    # Robbery / theft / burglary queries — with optional detection-rate focus
+    if any(k in q for k in (
+        "robbery", "theft", "burglary", "steal", "snatch", "loot",
+        "ದರೋಡೆ", "ಕಳ್ಳತನ",
+    )):
+        has_detection = any(k in q for k in (
+            "detection", "solved", "clear", "dispose", "rate",
+        ))
+        crime_cond = (
+            "csh.CrimeHeadName IN ('Robbery', 'Theft', 'Burglary')"
+        )
+        if dist_filter:
+            where = f"WHERE {crime_cond} AND {dist_filter}"
+        else:
+            where = f"WHERE {crime_cond}"
+
+        loc_suffix_en = f" in {dist_label_en}" if dist_label_en else ""
+        loc_prefix_kn = f"{dist_label_kn}ಯಲ್ಲಿ " if dist_label_kn else ""
+
+        if has_detection or is_ranking:
+            sql = (
+                "SELECT u.UnitName AS station, d.DistrictName AS district, "
+                "       COUNT(c.CaseMasterID) AS total, "
+                "       SUM(CASE WHEN csm.CaseStatusName IN "
+                "           ('Chargesheeted', 'Convicted') THEN 1 ELSE 0 END) AS detected, "
+                "       ROUND(100.0 * SUM(CASE WHEN csm.CaseStatusName IN "
+                "           ('Chargesheeted', 'Convicted') THEN 1 ELSE 0 END) "
+                "           / MAX(COUNT(c.CaseMasterID), 1), 1) AS detection_rate "
+                "FROM CaseMaster c "
+                "JOIN CrimeSubHead csh ON csh.CrimeSubHeadID = c.CrimeMinorHeadID "
+                "JOIN Unit u ON u.UnitID = c.PoliceStationID "
+                "JOIN District d ON d.DistrictID = u.DistrictID "
+                "JOIN CaseStatusMaster csm ON csm.CaseStatusID = c.CaseStatusID "
+                f"{where} "
+                "GROUP BY u.UnitName, d.DistrictName "
+                "ORDER BY detection_rate DESC LIMIT 15"
+            )
+            return _fb(is_kn, sql,
+                       f"Police stations ranked by robbery/theft detection rate{loc_suffix_en}.",
+                       f"{loc_prefix_kn}ದರೋಡೆ/ಕಳ್ಳತನ ಪತ್ತೆ ದರದ ಪ್ರಕಾರ ಪೊಲೀಸ್ ಠಾಣೆಗಳ ಶ್ರೇಣಿ.",
+                       "bar",
+                       f"Top police stations{loc_suffix_en} by robbery/theft detection rate:",
+                       f"ದರೋಡೆ/ಕಳ್ಳತನ ಪತ್ತೆ ದರದ ಅಗ್ರ ಠಾಣೆಗಳು ({dist_label_kn or 'ಕರ್ನಾಟಕ'}):")
+        else:
+            sql = (
+                "SELECT c.CrimeNo AS crime_no, csh.CrimeHeadName AS crime_type, "
+                "       u.UnitName AS station, d.DistrictName AS district, "
+                "       c.CrimeRegisteredDate AS date, csm.CaseStatusName AS status "
+                "FROM CaseMaster c "
+                "JOIN CrimeSubHead csh ON csh.CrimeSubHeadID = c.CrimeMinorHeadID "
+                "JOIN Unit u ON u.UnitID = c.PoliceStationID "
+                "JOIN District d ON d.DistrictID = u.DistrictID "
+                "JOIN CaseStatusMaster csm ON csm.CaseStatusID = c.CaseStatusID "
+                f"{where} "
+                "ORDER BY c.CrimeRegisteredDate DESC LIMIT 25"
+            )
+            return _fb(is_kn, sql,
+                       f"Recent robbery/theft/burglary cases{loc_suffix_en}.",
+                       f"{loc_prefix_kn}ಇತ್ತೀಚಿನ ದರೋಡೆ/ಕಳ್ಳತನ/ಮನೆ ಕಳ್ಳತನ ಪ್ರಕರಣಗಳು.",
+                       "table",
+                       f"Recent robbery/theft cases{loc_suffix_en}:",
+                       f"ಇತ್ತೀಚಿನ ದರೋಡೆ/ಕಳ್ಳತನ ಪ್ರಕರಣಗಳು ({dist_label_kn or 'ಕರ್ನಾಟಕ'}):")
+
+    # Cyber crime queries
+    if any(k in q for k in (
+        "cyber", "phishing", "online fraud", "ransomware", "identity theft",
+        "ಸೈಬರ್", "ಫಿಶಿಂಗ್",
+    )):
+        if dist_filter:
+            where = f"WHERE asa.ActID = 'IT Act' AND {dist_filter}"
+        else:
+            where = "WHERE asa.ActID = 'IT Act'"
+        loc_suffix_en = f" in {dist_label_en}" if dist_label_en else ""
+        loc_prefix_kn = f"{dist_label_kn}ಯಲ್ಲಿ " if dist_label_kn else ""
+        sql = (
+            "SELECT d.DistrictName AS district, "
+            "       COUNT(c.CaseMasterID) AS cyber_cases "
+            "FROM CaseMaster c "
+            "JOIN ActSectionAssociation asa ON asa.CaseMasterID = c.CaseMasterID "
+            "JOIN Unit u ON u.UnitID = c.PoliceStationID "
+            "JOIN District d ON d.DistrictID = u.DistrictID "
+            f"{where} "
+            "GROUP BY d.DistrictName ORDER BY cyber_cases DESC LIMIT 15"
+        )
+        return _fb(is_kn, sql,
+                   f"Cyber crime cases by district{loc_suffix_en}.",
+                   f"{loc_prefix_kn}ಜಿಲ್ಲಾವಾರು ಸೈಬರ್ ಅಪರಾಧ ಪ್ರಕರಣಗಳು.",
+                   "bar",
+                   f"Cyber crime cases{loc_suffix_en}:",
+                   f"ಸೈಬರ್ ಅಪರಾಧ ಪ್ರಕರಣಗಳು ({dist_label_kn or 'ಕರ್ನಾಟಕ'}):")
+
+    # Monthly trend queries
+    if any(k in q for k in (
+        "trend", "monthly", "month", "over time", "pattern",
+        "increase", "decrease", "rise", "fall",
+        "ಟ್ರೆಂಡ್", "ತಿಂಗಳು", "ಏರಿಕೆ", "ಇಳಿಕೆ",
+    )):
+        loc_suffix_en = f" in {dist_label_en}" if dist_label_en else ""
+        loc_prefix_kn = f"{dist_label_kn}ಯಲ್ಲಿ " if dist_label_kn else ""
+        if dist_filter:
+            where = f"WHERE {dist_filter}"
+        else:
+            where = ""
+        sql = (
+            "SELECT strftime('%Y-%m', c.CrimeRegisteredDate) AS month, "
+            "       COUNT(c.CaseMasterID) AS cases "
+            "FROM CaseMaster c "
+            "JOIN Unit u ON u.UnitID = c.PoliceStationID "
+            "JOIN District d ON d.DistrictID = u.DistrictID "
+            f"{where} "
+            "GROUP BY month ORDER BY month LIMIT 24"
+        )
+        return _fb(is_kn, sql,
+                   f"Monthly crime trend{loc_suffix_en}.",
+                   f"{loc_prefix_kn}ತಿಂಗಳ ಅಪರಾಧ ಟ್ರೆಂಡ್.",
+                   "line",
+                   f"Monthly crime trend{loc_suffix_en}:",
+                   f"ತಿಂಗಳ ಅಪರಾಧ ಟ್ರೆಂಡ್ ({dist_label_kn or 'ಕರ್ನಾಟಕ'}):")
+
 
     if any(k in q for k in ("ndps", "ganja", "narcotic", "ಮಾದಕ")):
         sql = (
@@ -679,6 +861,11 @@ def _fallback(query: str) -> LLMResult:
                "ಇತ್ತೀಚಿನ ಎಫ್‌ಐಆರ್‌ಗಳು:")
 
 
+def clear_cooldowns() -> None:
+    """Clear all provider cooldowns so fresh API requests are attempted."""
+    _COOLDOWN.clear()
+
+
 # ---------------------------------------------------------------- entry point
 def nl_to_sql(query: str, history: list[ChatTurn] | None = None,
               capp=None) -> LLMResult:
@@ -689,12 +876,13 @@ def nl_to_sql(query: str, history: list[ChatTurn] | None = None,
     failures, short for rate limits) so the next key/provider is tried
     immediately and quota exhaustion degrades seamlessly.
     """
+    is_kn = any("\u0c80" <= c <= "\u0cff" for c in query)
     messages = _messages_from_history(query, history)
 
     # 1. Catalyst QuickML (LLM serving)
     try:
         data = catalyst.quickml_generate(SYSTEM_PROMPT, messages, capp=capp)
-        r = _result_from_json(data)
+        r = _result_from_json(data, is_kn)
         r.provider = "quickml"
         return r
     except Exception:  # noqa: BLE001
@@ -709,7 +897,7 @@ def nl_to_sql(query: str, history: list[ChatTurn] | None = None,
         try:
             text = _CALLERS[p["kind"]](p, SYSTEM_PROMPT, messages)
             data = _extract_json(text)
-            r = _result_from_json(data)
+            r = _result_from_json(data, is_kn)
             r.raw = text
             r.provider = p["id"]
             return r
@@ -718,8 +906,8 @@ def nl_to_sql(query: str, history: list[ChatTurn] | None = None,
             code = getattr(getattr(e, "response", None), "status_code", None)
             if code == 429:          # rate limit / quota — brief cooldown
                 cooldown = 120
-            elif code in (401, 403):  # bad/revoked key — long cooldown
-                cooldown = 3600
+            elif code in (401, 403):  # bad/revoked key — 5m cooldown
+                cooldown = 300
             else:                     # transient / parse error
                 cooldown = 30
             _COOLDOWN[p["id"]] = now + cooldown
@@ -744,9 +932,10 @@ def _messages_from_history(query: str,
     return msgs
 
 
-def _result_from_json(data: dict) -> LLMResult:
+def _result_from_json(data: dict, is_kn: bool = False) -> LLMResult:
+    lang = "kn" if is_kn else data.get("language", "en")
     return LLMResult(
-        language=data.get("language", "en"),
+        language=lang,
         sql=data.get("sql", "").strip().rstrip(";"),
         explanation_en=data.get("explanation_en", ""),
         explanation_kn=data.get("explanation_kn", ""),
@@ -754,3 +943,4 @@ def _result_from_json(data: dict) -> LLMResult:
         answer_prefix_en=data.get("answer_prefix_en", ""),
         answer_prefix_kn=data.get("answer_prefix_kn", ""),
     )
+

@@ -11,14 +11,14 @@ try {
     & .\.venv\Scripts\python.exe -m pip install -q -r requirements.txt
 
     if (-not (Test-Path .env)) {
-        Write-Host "No backend\.env found — copying from .env.example (fallback mode)." -ForegroundColor Yellow
+        Write-Host "No backend\.env found - copying from .env.example (fallback mode)." -ForegroundColor Yellow
         Copy-Item .env.example .env
     }
 
     Write-Host ""
-    Write-Host "Starting KSP Crime AI at http://localhost:8000" -ForegroundColor Green
+    Write-Host "Starting KSP Crime AI at http://localhost:8005" -ForegroundColor Green
     Write-Host ""
-    & .\.venv\Scripts\python.exe -m uvicorn main:app --reload --port 8000
+    & .\.venv\Scripts\python.exe -m uvicorn main:app --reload --port 8005
 }
 finally {
     Pop-Location

@@ -72,7 +72,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(Path(__file__).parent / ".env", override=True)
 
 import sqlglot  # noqa: E402
 from sqlglot import exp  # noqa: E402
@@ -83,8 +83,11 @@ import jobs  # noqa: E402
 from db import cursor, init_schema, read_cursor  # noqa: E402
 import llm  # noqa: E402
 from llm import ChatTurn, is_safe_sql, nl_to_sql  # noqa: E402
+llm.clear_cooldowns()
+
 from seed import seed  # noqa: E402
 
+# Force reload after hotspots filter listeners integration
 app = FastAPI(title="KSP Crime AI", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
@@ -92,6 +95,45 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/admin/reseed")
+def admin_reseed():
+    tables = [
+        "PersonAlias", "inv_arrestsurrenderaccused", "ArrestSurrender", "ChargesheetDetails",
+        "ActSectionAssociation", "Accused", "Victim", "ComplainantDetails", "CaseMaster",
+        "Court", "OccupationMaster", "ReligionMaster", "CasteMaster", "CaseStatusMaster",
+        "GravityOffence", "CaseCategory", "CrimeHeadActSection", "CrimeSubHead", "CrimeHead",
+        "Section", "Act", "Employee", "Designation", "Rank", "Unit", "UnitType", "DistrictGeo",
+        "District", "State"
+    ]
+    with cursor() as conn:
+        conn.execute("PRAGMA foreign_keys = OFF;")
+        for tbl in tables:
+            try:
+                conn.execute(f"DELETE FROM {tbl};")
+            except Exception:
+                pass
+        conn.execute("PRAGMA foreign_keys = ON;")
+    seed(n_cases=5000)
+    return {"status": "ok", "message": "Successfully reseeded with 5000 cases"}
+
+
+@app.get("/admin/check_db")
+def admin_check_db():
+    res = {}
+    with cursor() as conn:
+        for tbl in ["CaseMaster", "District", "Employee", "PersonAlias"]:
+            try:
+                n = conn.execute(f"SELECT COUNT(*) AS n FROM {tbl}").fetchone()["n"]
+                res[tbl] = n
+            except Exception as e:
+                res[tbl] = f"error: {str(e)}"
+    return res
+
+
+
+
 
 
 # ============================================================
@@ -703,6 +745,9 @@ def chat(body: ChatBody, request: Request,
 # ============================================================
 @app.get("/hotspots")
 def get_hotspots(request: Request, level: str = "district",
+                 crime_type: str | None = None,
+                 severity: str | None = None,
+                 patrol_priority: str | None = None,
                  session: dict = Depends(current_session)) -> dict:
     if level not in ("district", "station"):
         raise HTTPException(400, "level must be 'district' or 'station'")
@@ -714,14 +759,23 @@ def get_hotspots(request: Request, level: str = "district",
     scope = _session_scope(session)
     suffix = "" if not scope else ":" + ",".join(
         f"{k}={v}" for k, v in sorted(scope.items()))
-    cache_key = f"hotspots:{level}{suffix}"
+    
+    # Add filters to the cache key
+    filters_part = []
+    if crime_type: filters_part.append(f"crime_type={crime_type}")
+    if severity: filters_part.append(f"severity={severity}")
+    if patrol_priority: filters_part.append(f"patrol_priority={patrol_priority}")
+    filters_suffix = ":" + ",".join(filters_part) if filters_part else ""
+    
+    cache_key = f"hotspots:{level}{suffix}{filters_suffix}"
     data = catalyst.cache_get(cache_key, capp=capp)
     if data is None:
         data = analytics.hotspots(
             level=level, limit=15 if level == "district" else 200,
-            scope=scope)
+            scope=scope, crime_type=crime_type, severity=severity,
+            patrol_priority=patrol_priority)
         catalyst.cache_set(cache_key, data, ttl_seconds=3600, capp=capp)
-    _audit(session, "hotspots", level, "", f"{len(data)} rows", capp=capp)
+    _audit(session, "hotspots", level, f"t:{crime_type}|s:{severity}|p:{patrol_priority}", f"{len(data)} rows", capp=capp)
     return {"level": level, "hotspots": data}
 
 
@@ -732,6 +786,41 @@ def get_trends(request: Request,
     _audit(session, "trends", "", "", f"{len(data['labels'])} months",
            capp=catalyst.app_from_request(request))
     return data
+
+
+@app.get("/trends/dashboard")
+def get_trends_dashboard(
+    request: Request,
+    district_id: int | None = None,
+    unit_id: int | None = None,
+    category: str | None = None,
+    months: int = 6,
+    session: dict = Depends(current_session),
+) -> dict:
+    scope = _session_scope(session) or {}
+    
+    if "district_id" not in scope and "unit_id" not in scope:
+        if district_id:
+            scope["district_id"] = district_id
+            
+    if "unit_id" not in scope:
+        if unit_id:
+            scope["unit_id"] = unit_id
+            if "district_id" in scope:
+                del scope["district_id"]
+                
+    data = analytics.trends_dashboard(
+        months=months,
+        scope=scope if scope else None,
+        category_name=category
+    )
+    
+    capp = catalyst.app_from_request(request)
+    _audit(session, "trends_dashboard", f"d:{district_id}|u:{unit_id}|c:{category}", "", 
+           f"trends count: {len(data['trends']['series'])}", capp=capp)
+           
+    return data
+
 
 
 @app.get("/network")
@@ -1284,7 +1373,9 @@ def get_case(crime_no: str, request: Request,
                    csh.CrimeHeadName AS minor_head,
                    cc.LookupValue AS category,
                    g.LookupValue AS gravity,
-                   csm.CaseStatusName AS status
+                   csm.CaseStatusName AS status,
+                   e.FirstName AS officer_name,
+                   ds.DesignationName AS officer_designation
             FROM CaseMaster c
             JOIN Unit u ON u.UnitID = c.PoliceStationID
             JOIN District d ON d.DistrictID = u.DistrictID
@@ -1293,6 +1384,8 @@ def get_case(crime_no: str, request: Request,
             JOIN CaseCategory cc ON cc.CaseCategoryID = c.CaseCategoryID
             JOIN GravityOffence g ON g.GravityOffenceID = c.GravityOffenceID
             JOIN CaseStatusMaster csm ON csm.CaseStatusID = c.CaseStatusID
+            LEFT JOIN Employee e ON e.EmployeeID = c.PolicePersonID
+            LEFT JOIN Designation ds ON ds.DesignationID = e.DesignationID
             WHERE c.CrimeNo = ?
             """,
             (crime_no,),
@@ -1314,13 +1407,27 @@ def get_case(crime_no: str, request: Request,
             "FROM ActSectionAssociation asa "
             "LEFT JOIN Section s ON s.ActCode = asa.ActID "
             "                   AND s.SectionCode = asa.SectionID "
-            "WHERE asa.CaseMasterID = (SELECT CaseMasterID FROM CaseMaster "
-            "                           WHERE CrimeNo = ?) "
+            "WHERE asa.CaseMasterID = ? "
             "ORDER BY asa.ActOrderID",
-            (crime_no,),
+            (case["CaseMasterID"],),
         ).fetchall()
 
-    resp = {"case": dict(case), "sections": [dict(s) for s in sections]}
+        arrests = conn.execute(
+            "SELECT COUNT(*) AS count FROM ArrestSurrender WHERE CaseMasterID = ?",
+            (case["CaseMasterID"],)
+        ).fetchone()["count"]
+
+        chargesheet = conn.execute(
+            "SELECT csdate, cstype FROM ChargesheetDetails WHERE CaseMasterID = ?",
+            (case["CaseMasterID"],)
+        ).fetchone()
+
+    resp = {
+        "case": dict(case),
+        "sections": [dict(s) for s in sections],
+        "arrest_count": arrests,
+        "chargesheet": dict(chargesheet) if chargesheet else None
+    }
 
     # Zia Text Analytics enrichment on BriefFacts (live Catalyst Zia use).
     insights = catalyst.zia_text_analytics(capp, case["BriefFacts"])
@@ -1343,6 +1450,58 @@ def get_case(crime_no: str, request: Request,
             ).fetchall()]
     _audit(session, "case", crime_no, "", "detail", capp=capp)
     return resp
+
+
+@app.get("/cases/search")
+def search_cases(
+    q: str | None = None,
+    district_id: int | None = None,
+    year: str | None = None,
+    ps: str | None = None,
+    sequence: str | None = None,
+    session: dict = Depends(current_session)
+) -> dict:
+    scope = _session_scope(session)
+    sc_sql, sc_params = analytics.scope_clause(scope, alias="c")
+    
+    like_sql = ""
+    params = list(sc_params)
+    if q:
+        like_sql += " AND (c.CrimeNo LIKE ? OR c.BriefFacts LIKE ?)"
+        params.extend([f"%{q}%", f"%{q}%"])
+    if district_id:
+        like_sql += " AND u.DistrictID = ?"
+        params.append(district_id)
+    if year:
+        like_sql += " AND c.CrimeNo LIKE ?"
+        params.append(f"%{year}%")
+    if ps:
+        like_sql += " AND u.UnitName LIKE ?"
+        params.append(f"%{ps}%")
+    if sequence:
+        try:
+            seq_val = f"{int(sequence):05d}"
+        except ValueError:
+            seq_val = sequence
+        like_sql += " AND c.CrimeNo LIKE ?"
+        params.append(f"%{seq_val}")
+
+    with cursor() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT c.CrimeNo, c.BriefFacts, u.UnitName AS station, d.DistrictName AS district, c.CrimeRegisteredDate
+            FROM CaseMaster c
+            JOIN Unit u ON u.UnitID = c.PoliceStationID
+            JOIN District d ON d.DistrictID = u.DistrictID
+            WHERE 1=1 {sc_sql} {like_sql}
+            ORDER BY c.CrimeRegisteredDate DESC
+            LIMIT 50
+            """,
+            params
+        ).fetchall()
+        
+    return {"cases": [dict(r) for r in rows]}
+
 
 
 @app.get("/case/{crime_no}/linked")
@@ -1376,19 +1535,23 @@ def get_case_linked(crime_no: str, request: Request,
 # ============================================================
 @app.get("/health")
 def health(request: Request) -> dict:
+    from db import DB_PATH
+    import os
     with cursor() as conn:
         n = conn.execute(
             "SELECT COUNT(*) AS n FROM CaseMaster"
         ).fetchone()["n"]
     services = catalyst.service_status(request)
-    # Which hosted LLMs are configured (ids only — never keys). The chain
-    # rotates through these on 429/quota before the keyword fallback.
     services["llm_providers"] = llm.configured_providers()
     return {
         "ok": True,
         "cases": n,
+        "db_path": str(DB_PATH.resolve()),
+        "db_exists": DB_PATH.exists(),
+        "db_size": os.path.getsize(DB_PATH) if DB_PATH.exists() else 0,
         "services": services,
     }
+
 
 
 # ============================================================
@@ -1411,9 +1574,6 @@ if FRONTEND_DIR:
         return FileResponse(FRONTEND_DIR / "index.html")
 
 
-# ============================================================
-# Startup
-# ============================================================
 @app.on_event("startup")
 def _startup() -> None:
     init_schema()
