@@ -40,7 +40,7 @@ $srcFE  = Join-Path $root "frontend"
 $destFE = Join-Path $root "client"
 Write-Host "  frontend/ → client/" -ForegroundColor Green
 
-$feFiles = @("index.html","app.js","styles.css","config.js")
+$feFiles = @("index.html","app.js","styles.css","config.js","logo.png")
 foreach ($f in $feFiles) {
     $src = Join-Path $srcFE $f
     if (Test-Path $src) {

@@ -105,6 +105,7 @@ const I18N = {
     'nav.cases': '📁 Cases',
     'nav.hotspots': '🌍 Geography',
     'nav.predict': '⚡ Predictions',
+    'nav.network': '🔗 Criminal Network',
     'nav.insights': '📄 Reports',
     'nav.audit': '⚙ Administration',
     'sidebar.signedInAs': 'Signed in as',
@@ -153,6 +154,7 @@ const I18N = {
     'nav.cases': '📁 ಪ್ರಕರಣಗಳು',
     'nav.hotspots': '🌍 ಭೂಗೋಳ',
     'nav.predict': '⚡ ಮುನ್ಸೂಚನೆಗಳು',
+    'nav.network': '🔗 ಅಪರಾಧ ಜಾಲ',
     'nav.insights': '📄 ವರದಿಗಳು',
     'nav.audit': '⚙ ಆಡಳಿತ',
     'sidebar.signedInAs': 'ಸೈನ್ ಇನ್ ಆಗಿರುವವರು',
@@ -348,12 +350,36 @@ async function initLogin() {
     $('#scopeEmp').classList.toggle('hidden', role !== 'io');
   });
 
+  // Password visibility toggle
+  const togglePwBtn = document.getElementById('togglePasswordBtn');
+  const pwInput = document.getElementById('loginPassword');
+  const eyeShow = document.getElementById('eyeIconShow');
+  const eyeHide = document.getElementById('eyeIconHide');
+  if (togglePwBtn && pwInput) {
+    togglePwBtn.addEventListener('click', () => {
+      const isPw = pwInput.type === 'password';
+      pwInput.type = isPw ? 'text' : 'password';
+      if (eyeShow && eyeHide) {
+        eyeShow.classList.toggle('hidden', isPw);
+        eyeHide.classList.toggle('hidden', !isPw);
+      }
+    });
+  }
+
+  const hideLoginError = () => {
+    const errDiv = document.getElementById('loginErrorMsg');
+    if (errDiv) errDiv.classList.add('hidden');
+  };
+  $('#loginPassword')?.addEventListener('input', hideLoginError);
+  $('#loginUser')?.addEventListener('input', hideLoginError);
+
   // Enter key on Officer ID or Password triggers login
   const triggerLogin = (e) => { if (e.key === 'Enter') $('#loginBtn').click(); };
   $('#loginUser')?.addEventListener('keydown', triggerLogin);
   $('#loginPassword')?.addEventListener('keydown', triggerLogin);
 
   $('#loginBtn').addEventListener('click', async () => {
+    hideLoginError();
     const role = $('#loginRole').value;
     const body = {
       user_id: $('#loginUser').value.trim() || 'KSP-DEMO',
@@ -372,7 +398,25 @@ async function initLogin() {
       persistSession();
       enterApp();
     } catch (e) {
-      alert(`Login failed: ${e.message}`);
+      let msg = e.message || 'Login failed';
+      try {
+        const jsonIdx = msg.indexOf('{');
+        if (jsonIdx !== -1) {
+          const parsed = JSON.parse(msg.slice(jsonIdx));
+          if (parsed.detail) msg = parsed.detail;
+        }
+      } catch {}
+      if (msg.toLowerCase().includes('invalid demo password')) {
+        msg = 'Invalid password';
+      }
+      const errDiv = document.getElementById('loginErrorMsg');
+      const errText = document.getElementById('loginErrorText');
+      if (errDiv && errText) {
+        errText.textContent = msg;
+        errDiv.classList.remove('hidden');
+      } else {
+        alert(`Login failed: ${msg}`);
+      }
     }
   });
 }
@@ -418,7 +462,7 @@ function enterApp() {
   const auditBtn = document.querySelector('[data-view="audit"]');
   if (auditBtn) auditBtn.style.display = s.role === 'admin' ? '' : 'none';
   showView('chat');
-  applyI18n();
+  loadNotifications();
   loadConversationsList();
 }
 
@@ -875,6 +919,11 @@ function addMessage(role, opts) {
 }
 
 function renderTable(columns, rows) {
+  columns = columns || [];
+  rows = rows || [];
+  if (!columns.length && rows.length) {
+    columns = Object.keys(rows[0] || {});
+  }
   const table = el('table', { class: 'data w-full' });
   // data-key / data-raw hold the original English so applyI18n can
   // retranslate already-rendered tables when the language flips.
@@ -893,6 +942,7 @@ function renderTable(columns, rows) {
   }
   return table;
 }
+
 
 function renderInlineChart(columns, rows, type) {
   // Retained as a fallback placeholder if needed elsewhere
@@ -992,15 +1042,60 @@ async function sendChat() {
   $('#chatLog').appendChild(thinking);
   $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
 
+  // Show loading state on Dynamic Cards
+  const dynContainer = document.getElementById('dynamicCards');
+  if (dynContainer) {
+    dynContainer.innerHTML = `
+      <div class="col-span-2 flex flex-col items-center justify-center text-center py-10 gap-3">
+        <div class="animate-spin w-6 h-6 border-2 border-accent border-t-transparent rounded-full"></div>
+        <span class="text-slate-400 text-xs italic">Processing query…</span>
+      </div>
+    `;
+  }
+
+  // Helper: single chat API call with a 45s timeout
+  async function chatRequest() {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45000);
+    try {
+      const r = await api('/chat', {
+        method: 'POST',
+        body: JSON.stringify({
+          query: q,
+          history: state.history,
+          conversation_id: state.conversationId,
+        }),
+        signal: controller.signal,
+      });
+      return r;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   try {
-    const r = await api('/chat', {
-      method: 'POST',
-      body: JSON.stringify({
-        query: q,
-        history: state.history,
-        conversation_id: state.conversationId,
-      }),
-    });
+    let r;
+    try {
+      r = await chatRequest();
+    } catch (firstErr) {
+      // Retry once on timeout or network error (cold start resilience)
+      const isTimeout = firstErr.name === 'AbortError' ||
+                        firstErr.message?.includes('Failed to fetch');
+      if (isTimeout) {
+        if (dynContainer) {
+          dynContainer.innerHTML = `
+            <div class="col-span-2 flex flex-col items-center justify-center text-center py-10 gap-3">
+              <div class="animate-spin w-6 h-6 border-2 border-amber-400 border-t-transparent rounded-full"></div>
+              <span class="text-amber-400 text-xs font-medium">LLM warming up — retrying…</span>
+            </div>
+          `;
+        }
+        r = await chatRequest();
+      } else {
+        throw firstErr;
+      }
+    }
+
     thinking.remove();
     if (r.conversation_id) {
       state.conversationId = r.conversation_id;
@@ -1053,10 +1148,21 @@ async function sendChat() {
       rows: r.rows, columns: r.columns, chart_hint: r.chart_hint
     });
     renderExplain(r, r.notes);
-    speak(prefix);
+    try { speak(prefix); } catch {}
   } catch (e) {
     thinking.remove();
     addMessage('bot', { prefix: `Error: ${e.message}` });
+    // Show error state in Dynamic Cards instead of leaving them blank
+    if (dynContainer) {
+      const isTimeout = e.name === 'AbortError';
+      dynContainer.innerHTML = `
+        <div class="col-span-2 flex flex-col items-center justify-center text-center py-10 text-xs gap-2">
+          <span class="text-2xl">${isTimeout ? '⏱️' : '⚠️'}</span>
+          <span class="text-rose-400 font-semibold">${isTimeout ? 'Request timed out' : 'Query failed'}</span>
+          <span class="text-slate-500 italic max-w-[300px]">${isTimeout ? 'The LLM took too long. Try a simpler query or retry.' : e.message || 'An error occurred processing your query.'}</span>
+        </div>
+      `;
+    }
   }
 }
 
@@ -3062,7 +3168,6 @@ function renderAuditTable(entries) {
   table.appendChild(thead);
   table.appendChild(tbody);
   wrapper.appendChild(table);
-
   return wrapper;
 }
 
@@ -3093,6 +3198,7 @@ function exportAuditLogs() {
   a.click();
   URL.revokeObjectURL(a.href);
 }
+
 
 // ---------------------------------------------------------------- PDF export
 // Server-side first (Catalyst SmartBrowz — proper fonts incl. Kannada, and a
@@ -3472,6 +3578,31 @@ function exportActiveCasePDF() {
   pdf.save(`ksp-case-summary-${crimeNo.replace(/[: ]/g, '-')}.pdf`);
 }
 
+// Notification loader
+async function loadNotifications() {
+  try {
+    const data = await api('/predict');
+    const warnings = data.warnings || [];
+    const list = document.getElementById('notificationList');
+    const badge = document.getElementById('notificationBadge');
+    if (!list) return;
+    if (!warnings.length) {
+      list.innerHTML = '<div class="p-3 text-slate-500 italic text-center">No active spike warnings.</div>';
+      if (badge) badge.classList.add('hidden');
+      return;
+    }
+    if (badge) badge.classList.remove('hidden');
+    list.innerHTML = warnings.map(w => `
+      <div class="p-2 rounded bg-ink-900 border border-ink-600 hover:border-accent transition cursor-pointer" onclick="showView('predict')">
+        <div class="font-bold text-amber-400 text-[11px]">${w.category || 'Warning'} · ${w.district || 'Statewide'}</div>
+        <div class="text-[10px] text-slate-300 mt-0.5">${w.message || ''}</div>
+      </div>
+    `).join('');
+  } catch (e) {
+    console.error('Failed to load notifications:', e);
+  }
+}
+
 // ---------------------------------------------------------------- boot
 document.addEventListener('DOMContentLoaded', async () => {
   setupVoice();
@@ -3602,6 +3733,45 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('#logoutBtn').addEventListener('click', () => {
     clearSession(); location.reload();
   });
+
+  // Notification loader is globally defined above
+
+  // Header search bar → navigate to Cases and search
+  const headerSearch = document.getElementById('headerSearchInput');
+  if (headerSearch) {
+    headerSearch.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const q = headerSearch.value.trim();
+        if (!q) return;
+        showView('cases');
+        const searchInput = document.getElementById('caseFilterSearch');
+        if (searchInput) searchInput.value = q;
+        try {
+          const r = await api('/cases/search?q=' + encodeURIComponent(q));
+          handleCaseSearchList(r.cases);
+        } catch (err) {
+          console.error('Header search failed:', err);
+        }
+      }
+    });
+  }
+
+  // Notification bell → show spike warnings dropdown
+  const bellBtn = document.getElementById('notificationBellBtn');
+  if (bellBtn) {
+    bellBtn.addEventListener('click', () => {
+      const dd = document.getElementById('notificationDropdown');
+      if (dd) dd.classList.toggle('hidden');
+    });
+    // Close dropdown on outside click
+    document.addEventListener('click', (e) => {
+      const dd = document.getElementById('notificationDropdown');
+      if (dd && !dd.contains(e.target) && !bellBtn.contains(e.target)) {
+        dd.classList.add('hidden');
+      }
+    });
+  }
 
   const applyBtn = document.getElementById('trendApplyBtn');
   if (applyBtn) {
@@ -3965,7 +4135,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const legendColor = isLight ? '#1e293b' : '#cbd5e1';
     Chart.defaults.color = tickColor;
     Chart.defaults.borderColor = gridColor;
+    // Update all existing chart instances
     Object.values(Chart.instances || {}).forEach(c => {
+      // Scales — iterate all axes (x, y, r, x1, y1, etc.)
       if (c.options?.scales) {
         Object.keys(c.options.scales).forEach(axis => {
           const s = c.options.scales[axis];
@@ -3974,11 +4146,13 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (!s.grid) s.grid = { color: gridColor };
         });
       }
+      // Legend labels
       if (c.options?.plugins?.legend?.labels) {
         c.options.plugins.legend.labels.color = legendColor;
       } else if (c.options?.plugins?.legend) {
         c.options.plugins.legend.labels = { color: legendColor };
       }
+      // Title
       if (c.options?.plugins?.title) {
         c.options.plugins.title.color = legendColor;
       }
@@ -4032,6 +4206,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       overlay.classList.remove('open');
     });
   }
+  // Close sidebar on nav click (mobile)
   document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       if (window.innerWidth <= 1024) {
@@ -4043,16 +4218,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // --- Keyboard shortcuts ---
   document.addEventListener('keydown', (e) => {
+    // Ctrl+K → focus search bar
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
       e.preventDefault();
       const searchInput = document.getElementById('headerSearchInput');
       if (searchInput) searchInput.focus();
     }
+    // Ctrl+E → export PDF
     if ((e.ctrlKey || e.metaKey) && e.key === 'e') {
       e.preventDefault();
       const pdfBtn = document.getElementById('pdfBtn');
       if (pdfBtn) pdfBtn.click();
     }
+    // Ctrl+1-7 → switch views
     if ((e.ctrlKey || e.metaKey) && e.key >= '1' && e.key <= '7') {
       e.preventDefault();
       const views = ['chat', 'trends', 'cases', 'hotspots', 'predict', 'network', 'insights'];
@@ -4066,5 +4244,5 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   applyI18n();
   await initLogin();
-  await tryRestoreSession();
+  await tryRestoreSession();  // reload survival — skips login if token valid
 });

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>KSP Crime AI · Conversational Intelligence</title>
+<title>KSP Crime AI Â· Conversational Intelligence</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
@@ -20,6 +20,7 @@
     background-color: #18202c !important;
     color: #e2e8f0 !important;
   }
+  /* Animated thinking dots */
   .thinking-dots { display: inline-flex; gap: 4px; align-items: center; height: 20px; }
   .thinking-dots span {
     width: 6px; height: 6px; border-radius: 50%; background: #94a3b8;
@@ -31,6 +32,7 @@
     0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
     40% { opacity: 1; transform: scale(1.2); }
   }
+  /* Skeleton loading shimmer */
   .skeleton {
     background: linear-gradient(90deg, #252f3e 25%, #2d3748 50%, #252f3e 75%);
     background-size: 200% 100%;
@@ -45,6 +47,7 @@
   .skeleton-line { height: 12px; margin-bottom: 8px; }
   .skeleton-line.short { width: 60%; }
   .skeleton-chart { height: 200px; }
+  /* Responsive */
   @media (max-width: 1024px) {
     #appSidebar { position: fixed; left: -240px; z-index: 40; transition: left 0.3s ease; }
     #appSidebar.open { left: 0; }
@@ -58,6 +61,7 @@
     header { flex-wrap: wrap; gap: 8px; }
     .hidden.md\:flex { display: none !important; }
   }
+  /* Light theme overrides */
   body.light-theme { background: #f1f5f9 !important; color: #1e293b !important; }
   body.light-theme .bg-ink-900,
   body.light-theme .bg-ink-950 { background: #f8fafc !important; }
@@ -79,18 +83,23 @@
     background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
     background-size: 200% 100%;
   }
+  /* Light theme â€” sidebar & nav */
   body.light-theme .nav-btn { color: #475569 !important; }
   body.light-theme .nav-btn:hover { background: #e2e8f0 !important; color: #0f172a !important; }
   body.light-theme .nav-btn.active { background: #dbeafe !important; color: #1e40af !important; border-left-color: #3b82f6 !important; }
+  /* Light theme â€” inputs, cards, chat */
   body.light-theme input,
   body.light-theme select,
   body.light-theme textarea { background: #f1f5f9 !important; color: #1e293b !important; border-color: #cbd5e1 !important; }
   body.light-theme .msg.bot { background: #f1f5f9 !important; border-color: #cbd5e1 !important; color: #334155 !important; }
   body.light-theme .msg { color: #1e293b !important; }
+  /* Light theme â€” shadows & misc */
   body.light-theme .shadow-sm { box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important; }
   body.light-theme .shadow-lg { box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important; }
   body.light-theme .shadow-2xl { box-shadow: 0 8px 24px rgba(0,0,0,0.1) !important; }
+  /* Light theme â€” login overlay */
   body.light-theme #login { background: rgba(241,245,249,0.95) !important; }
+  /* Theme toggle switch */
   .theme-switch {
     position: relative; width: 48px; height: 24px; border-radius: 12px;
     background: #2d3748; border: 1px solid #475569; cursor: pointer;
@@ -139,18 +148,18 @@ tailwind.config = {
       <div class="w-10 h-10 rounded-lg bg-khaki-500 flex items-center justify-center text-ink-900 font-bold">K</div>
       <div>
         <h1 class="text-lg font-semibold">Karnataka State Police</h1>
-        <p class="text-xs text-slate-400">Crime Records Bureau · Conversational Intelligence</p>
+        <p class="text-xs text-slate-400">Crime Records Bureau Â· Conversational Intelligence</p>
       </div>
     </div>
     <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Officer ID</label>
     <input id="loginUser" class="w-full mb-4 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 focus:border-accent outline-none" placeholder="e.g. KSP-4471" value="KSP-DEMO" />
     <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Role</label>
     <select id="loginRole" class="w-full mb-4 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 outline-none">
-      <option value="admin">Admin — full access + audit log</option>
-      <option value="dysp">DySP — district scope, full PII</option>
-      <option value="sho">SHO — single station, full PII</option>
-      <option value="io">Investigating Officer — own cases only</option>
-      <option value="analyst">Analyst — aggregates only, PII refused</option>
+      <option value="admin">Admin â€” full access + audit log</option>
+      <option value="dysp">DySP â€” district scope, full PII</option>
+      <option value="sho">SHO â€” single station, full PII</option>
+      <option value="io">Investigating Officer â€” own cases only</option>
+      <option value="analyst">Analyst â€” aggregates only, PII refused</option>
     </select>
     <div id="scopeDistrict" class="hidden">
       <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">District</label>
@@ -170,12 +179,24 @@ tailwind.config = {
       <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Investigating Officer</label>
       <select id="loginEmployee" class="w-full mb-4 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 outline-none"></select>
     </div>
-    <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Demo Password <span class="normal-case text-slate-500">(only if configured)</span></label>
-    <input id="loginPassword" type="password" class="w-full mb-4 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 focus:border-accent outline-none" placeholder="leave blank if none" />
+    <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Password</label>
+    <div class="relative mb-2">
+      <input id="loginPassword" type="password" class="w-full px-3 py-2 pr-10 rounded-lg bg-ink-900 border border-ink-600 focus:border-accent outline-none text-slate-100" placeholder="Enter password" />
+      <button type="button" id="togglePasswordBtn" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 focus:outline-none transition p-1" title="Show/Hide password">
+        <svg id="eyeIconShow" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+        </svg>
+        <svg id="eyeIconHide" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858-5.908a10.025 10.025 0 013.682-.792c4.478 0 8.268 2.943 9.542 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21M3 3l18 18"></path>
+        </svg>
+      </button>
+    </div>
+    <div id="loginErrorMsg" class="hidden text-xs text-rose-400 mb-3 font-medium bg-rose-950/40 border border-rose-800/50 rounded-lg px-3 py-2 flex items-center gap-1.5">
+      <span>âš ï¸</span> <span id="loginErrorText"></span>
+    </div>
     <button id="loginBtn" class="w-full mt-2 bg-accent hover:bg-blue-500 text-white font-medium py-2.5 rounded-lg transition">Enter</button>
-    <p class="text-[11px] text-slate-500 mt-4 leading-relaxed">
-      Role-based access is enforced in the query layer. Every action is written to an audit trail. Analyst sessions cannot project PII columns; IO sessions only see their own cases.
-    </p>
+    
   </div>
 </div>
 
@@ -186,7 +207,7 @@ tailwind.config = {
   <aside id="appSidebar" class="w-60 shrink-0 bg-ink-900 border-r border-ink-600 flex flex-col justify-between transition-all duration-300">
     <div class="flex flex-col flex-1">
       <div class="px-5 py-4 border-b border-ink-600 flex items-center gap-2">
-        <img src="./logo.jpg" class="w-8 h-8 rounded-full border border-kspGold/50 object-cover" alt="KSP Logo" />
+        <img src="./logo.png" class="w-8 h-8 rounded-full border border-kspGold/50 object-cover" alt="KSP Logo" />
         <div>
           <div class="text-xs font-bold leading-tight uppercase tracking-wider text-slate-100">AVALOKANA</div>
           <div class="text-[9px] text-slate-400 tracking-widest uppercase">CRIME AI PORTAL</div>
@@ -195,32 +216,35 @@ tailwind.config = {
       <!-- Navigation Links -->
       <nav class="flex-1 px-3 py-4 space-y-1.5 text-xs font-semibold">
         <button data-view="chat" class="nav-btn active flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-slate-300 hover:bg-ink-700/50 hover:text-white transition duration-150" data-i18n="nav.chat">
-          <span class="text-sm">📊</span> <span class="tracking-wide">Dashboard</span>
+          <span class="text-sm">ðŸ“Š</span> <span class="tracking-wide">Dashboard</span>
         </button>
         <button data-view="trends" class="nav-btn flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-slate-300 hover:bg-ink-700/50 hover:text-white transition duration-150" data-i18n="nav.trends">
-          <span class="text-sm">📈</span> <span class="tracking-wide">Crime Trends</span>
+          <span class="text-sm">ðŸ“ˆ</span> <span class="tracking-wide">Crime Trends</span>
         </button>
         <button data-view="cases" class="nav-btn flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-slate-300 hover:bg-ink-700/50 hover:text-white transition duration-150" data-i18n="nav.cases">
-          <span class="text-sm">📁</span> <span class="tracking-wide">Cases</span>
+          <span class="text-sm">ðŸ“</span> <span class="tracking-wide">Cases</span>
         </button>
         <button data-view="hotspots" class="nav-btn flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-slate-300 hover:bg-ink-700/50 hover:text-white transition duration-150" data-i18n="nav.hotspots">
-          <span class="text-sm">🌍</span> <span class="tracking-wide">Geography</span>
+          <span class="text-sm">ðŸŒ</span> <span class="tracking-wide">Geography</span>
         </button>
         <button data-view="predict" class="nav-btn flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-slate-300 hover:bg-ink-700/50 hover:text-white transition duration-150" data-i18n="nav.predict">
-          <span class="text-sm">⚡</span> <span class="tracking-wide">Predictions</span>
+          <span class="text-sm">âš¡</span> <span class="tracking-wide">Predictions</span>
+        </button>
+        <button data-view="network" class="nav-btn flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-slate-300 hover:bg-ink-700/50 hover:text-white transition duration-150" data-i18n="nav.network">
+          <span class="text-sm">ðŸ”—</span> <span class="tracking-wide">Criminal Network</span>
         </button>
         <button data-view="insights" class="nav-btn flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-slate-300 hover:bg-ink-700/50 hover:text-white transition duration-150" data-i18n="nav.insights">
-          <span class="text-sm">📄</span> <span class="tracking-wide">Reports</span>
+          <span class="text-sm">ðŸ“„</span> <span class="tracking-wide">Reports</span>
         </button>
         <button data-view="audit" class="nav-btn flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-slate-300 hover:bg-ink-700/50 hover:text-white transition duration-150" data-i18n="nav.audit">
-          <span class="text-sm">⚙</span> <span class="tracking-wide">Administration</span>
+          <span class="text-sm">âš™</span> <span class="tracking-wide">Administration</span>
         </button>
       </nav>
     </div>
 
     <!-- Sidebar footer (signed in block) -->
     <div class="p-4 border-t border-ink-600 flex flex-col gap-2">
-      <button id="logoutBtn" class="text-[10px] text-left font-bold text-accent hover:text-blue-400 transition" data-i18n="sidebar.signOut">Sign out ↗</button>
+      <button id="logoutBtn" class="text-[10px] text-left font-bold text-accent hover:text-blue-400 transition" data-i18n="sidebar.signOut">Sign out â†—</button>
     </div>
   </aside>
 
@@ -234,25 +258,31 @@ tailwind.config = {
 
       <!-- User Controls & Language Toggle -->
       <div class="flex items-center gap-4 text-xs font-semibold">
+        <!-- Hamburger (mobile) -->
         <button id="hamburgerBtn" class="hidden w-8 h-8 rounded-lg bg-ink-700/50 hover:bg-ink-700 border border-ink-600 items-center justify-center text-slate-300 transition" title="Menu" style="display:none">
-          <span class="text-base">☰</span>
+          <span class="text-base">â˜°</span>
         </button>
+        <!-- Theme toggle -->
         <div id="themeToggleBtn" class="theme-switch" title="Toggle Light/Dark Mode">
-          <div class="switch-knob" id="themeIcon">🌙</div>
+          <div class="switch-knob" id="themeIcon">ðŸŒ™</div>
         </div>
         <!-- Language Selector Links -->
         <div class="flex items-center gap-1">
           <select id="langSel" class="bg-transparent border-none text-slate-300 font-bold hover:text-white outline-none cursor-pointer">
             <option value="en" class="bg-ink-900 text-slate-300">English</option>
-            <option value="kn" class="bg-ink-900 text-slate-300">ಕನ್ನಡ</option>
+            <option value="kn" class="bg-ink-900 text-slate-300">à²•à²¨à³à²¨à²¡</option>
           </select>
         </div>
         
         <!-- Notification bell -->
-        <button class="relative w-8 h-8 rounded-lg bg-ink-700/50 hover:bg-ink-700 border border-ink-600 flex items-center justify-center text-slate-300 transition">
-          <span>🔔</span>
-          <span class="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-red-500 rounded-full"></span>
+        <button id="notificationBellBtn" class="relative w-8 h-8 rounded-lg bg-ink-700/50 hover:bg-ink-700 border border-ink-600 flex items-center justify-center text-slate-300 transition" title="Spike warnings">
+          <span>ðŸ””</span>
+          <span id="notificationBadge" class="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-red-500 rounded-full hidden"></span>
         </button>
+        <div id="notificationDropdown" class="absolute top-12 right-16 w-80 bg-ink-800 border border-ink-600 rounded-xl shadow-2xl z-50 hidden overflow-hidden">
+          <div class="px-4 py-2.5 border-b border-ink-600 text-[10px] font-bold uppercase tracking-widest text-slate-400">Active Warnings</div>
+          <div id="notificationList" class="max-h-64 overflow-y-auto p-2 space-y-1.5 text-xs"></div>
+        </div>
 
         <!-- User avatar dropdown -->
         <div class="flex items-center gap-2.5 pl-4 border-l border-ink-600">
@@ -281,10 +311,10 @@ tailwind.config = {
             </div>
             <div class="flex items-center gap-2">
               <button id="headerExportPdfBtn" class="px-3 py-1.5 rounded-lg bg-accent hover:bg-blue-600 text-white border border-accent hover:border-blue-600 text-[10px] font-bold flex items-center gap-1 transition">
-                <span>📥 Export PDF</span>
+                <span>ðŸ“¥ Export PDF</span>
               </button>
               <button id="historyDropdownBtn" class="px-3 py-1.5 rounded-lg bg-ink-900 hover:bg-ink-800 border border-ink-600 text-[10px] font-bold text-slate-300 flex items-center gap-1.5 transition">
-                <span>📜 History</span> <span class="text-[8px]">▼</span>
+                <span>ðŸ“œ History</span> <span class="text-[8px]">â–¼</span>
               </button>
             </div>
           </div>
@@ -293,7 +323,7 @@ tailwind.config = {
           <div class="bg-ink-900 border border-ink-600 rounded-xl flex flex-col h-[460px] shrink-0 overflow-hidden shadow-lg">
             <!-- Banner Header -->
             <div class="px-4 py-3 bg-ink-800 border-b border-ink-600 flex items-center gap-2">
-              <span class="text-sm">💬</span>
+              <span class="text-sm">ðŸ’¬</span>
               <span class="text-xs font-bold text-slate-300 tracking-wider uppercase">Crime Intelligence AI Assistant</span>
             </div>
             <!-- Scrollable Chat log -->
@@ -302,10 +332,10 @@ tailwind.config = {
             <div class="border-t border-ink-600 p-3 bg-ink-800/80 flex items-center gap-2">
               <input id="chatInput" type="text" class="flex-1 px-4 py-2 rounded-full bg-ink-950 border border-ink-600 outline-none focus:border-accent text-xs text-slate-100 placeholder-slate-500" placeholder="User prompt and Controls..." />
               <div class="flex items-center gap-1.5">
-                <button id="voiceBtn" class="w-8 h-8 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white flex items-center justify-center transition shrink-0 text-sm shadow-sm" title="Voice input">🎙</button>
-                <button id="ttsToggleBtn" class="w-8 h-8 rounded-full bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-300 hover:text-white flex items-center justify-center transition shrink-0 text-xs shadow-sm" title="Voice Audio readback toggle">🔊</button>
-                <button id="resetChatBtn" class="w-8 h-8 rounded-full bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-300 hover:text-white flex items-center justify-center transition shrink-0 text-xs shadow-sm" title="Reset chat history">↩</button>
-                <button id="attachmentBtn" class="w-8 h-8 rounded-full bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-300 hover:text-white flex items-center justify-center transition shrink-0 text-xs shadow-sm" title="Attach file">📎</button>
+                <button id="voiceBtn" class="w-8 h-8 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white flex items-center justify-center transition shrink-0 text-sm shadow-sm" title="Voice input">ðŸŽ™</button>
+                <button id="ttsToggleBtn" class="w-8 h-8 rounded-full bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-300 hover:text-white flex items-center justify-center transition shrink-0 text-xs shadow-sm" title="Voice Audio readback toggle">ðŸ”Š</button>
+                <button id="resetChatBtn" class="w-8 h-8 rounded-full bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-300 hover:text-white flex items-center justify-center transition shrink-0 text-xs shadow-sm" title="Reset chat history">â†©</button>
+                <button id="attachmentBtn" class="w-8 h-8 rounded-full bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-300 hover:text-white flex items-center justify-center transition shrink-0 text-xs shadow-sm" title="Attach file">ðŸ“Ž</button>
                 <input type="file" id="chatFileInput" class="hidden" />
                 <button id="sendBtn" class="px-4 py-2 rounded-full bg-accent hover:bg-blue-500 text-white text-xs font-semibold tracking-wide transition shrink-0 shadow-sm" data-i18n="chat.send">Send</button>
               </div>
@@ -344,7 +374,7 @@ tailwind.config = {
         <aside class="border-l border-ink-600 bg-ink-900 overflow-y-auto p-5 flex flex-col space-y-5 h-full">
           <h3 class="text-xs font-bold uppercase tracking-widest text-slate-400 border-b border-ink-600 pb-2 flex justify-between items-center">
             <span data-i18n="chat.explainTitle">Explainability & Audit Trail</span>
-            <span id="llmBadge" class="px-2 py-0.5 rounded bg-ink-750 border border-ink-600 text-[10px] tracking-wider text-slate-300 font-semibold">LLM: —</span>
+            <span id="llmBadge" class="px-2 py-0.5 rounded bg-ink-750 border border-ink-600 text-[10px] tracking-wider text-slate-300 font-semibold">LLM: â€”</span>
           </h3>
           <div id="explain" class="space-y-4 text-xs">
             <p class="text-slate-500 italic" data-i18n="chat.explainEmpty">The SQL, LLM reasoning, and role-policy notes for the most recent answer will appear here.</p>
@@ -352,7 +382,8 @@ tailwind.config = {
         </aside>
       </section>
 
-      <section id="view-cases" class="view hidden flex-grow h-full overflow-hidden bg-ink-950 relative">
+      <!-- VIEW: CASES -->
+      <section id="view-cases" class="view hidden flex-grow h-full overflow-hidden bg-ink-950">
         
         <!-- Subview A: Landing View (Full Screen Cases List) -->
         <div id="caseLandingView" class="flex flex-col h-full overflow-hidden p-6 space-y-4 w-full">
@@ -440,7 +471,7 @@ tailwind.config = {
             <!-- Back Button -->
             <div class="shrink-0">
               <button id="caseBackBtn" class="px-3.5 py-1.5 rounded-lg bg-ink-800 hover:bg-ink-700 border border-ink-600 text-xs font-bold text-slate-300 hover:text-white flex items-center gap-1.5 transition">
-                <span>←</span> Back to Cases Database
+                <span>â†</span> Back to Cases Database
               </button>
             </div>
 
@@ -448,11 +479,11 @@ tailwind.config = {
             <div class="bg-ink-900 border border-ink-600 rounded-xl p-5 shadow-sm shrink-0 flex justify-between items-center">
               <div class="space-y-1">
                 <div class="text-[9px] font-bold text-accent uppercase tracking-wider">FIR Details</div>
-                <h3 id="caseHeadCrimeNo" class="text-xl font-black text-slate-100 tracking-tight">—</h3>
+                <h3 id="caseHeadCrimeNo" class="text-xl font-black text-slate-100 tracking-tight">â€”</h3>
                 <p class="text-xs text-slate-400 flex gap-4">
-                  <span>District: <strong id="caseHeadDistrict" class="text-slate-300">—</strong></span>
-                  <span>Station: <strong id="caseHeadStation" class="text-slate-300">—</strong></span>
-                  <span>Incident Date: <strong id="caseHeadIncidentDate" class="text-slate-300">—</strong></span>
+                  <span>District: <strong id="caseHeadDistrict" class="text-slate-300">â€”</strong></span>
+                  <span>Station: <strong id="caseHeadStation" class="text-slate-300">â€”</strong></span>
+                  <span>Incident Date: <strong id="caseHeadIncidentDate" class="text-slate-300">â€”</strong></span>
                 </p>
               </div>
               <div class="flex items-center gap-3">
@@ -466,42 +497,42 @@ tailwind.config = {
               <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
                 <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Crime Details</span>
                 <div class="text-xs font-extrabold text-slate-200 mt-2">IPC Sections</div>
-                <div id="caseKpiSections" class="text-sm font-black text-accent truncate">—</div>
+                <div id="caseKpiSections" class="text-sm font-black text-accent truncate">â€”</div>
               </div>
 
               <!-- Complainant Summary Card -->
               <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
                 <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Complainant</span>
-                <div id="caseKpiComplainant" class="text-xs font-extrabold text-slate-200 truncate mt-2">—</div>
-                <div id="caseKpiComplainantContact" class="text-[10px] text-slate-500 truncate">+91 —</div>
+                <div id="caseKpiComplainant" class="text-xs font-extrabold text-slate-200 truncate mt-2">â€”</div>
+                <div id="caseKpiComplainantContact" class="text-[10px] text-slate-500 truncate">+91 â€”</div>
               </div>
 
               <!-- Accused Summary Card -->
               <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
                 <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Accused</span>
-                <div id="caseKpiAccusedCount" class="text-xs font-extrabold text-slate-200 mt-2">—</div>
-                <div id="caseKpiAccusedName" class="text-[10px] text-slate-500 truncate">—</div>
+                <div id="caseKpiAccusedCount" class="text-xs font-extrabold text-slate-200 mt-2">â€”</div>
+                <div id="caseKpiAccusedName" class="text-[10px] text-slate-500 truncate">â€”</div>
               </div>
 
               <!-- I.O. Details Card -->
               <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
                 <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Investigating Officer</span>
-                <div id="caseKpiIoName" class="text-xs font-extrabold text-slate-200 truncate mt-2">—</div>
-                <div id="caseKpiIoRank" class="text-[10px] text-slate-500 truncate">—</div>
+                <div id="caseKpiIoName" class="text-xs font-extrabold text-slate-200 truncate mt-2">â€”</div>
+                <div id="caseKpiIoRank" class="text-[10px] text-slate-500 truncate">â€”</div>
               </div>
 
               <!-- Arrest Status Card -->
               <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
                 <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Arrest Status</span>
-                <div id="caseKpiArrestStatus" class="text-xs font-extrabold text-emerald-400 mt-2">—</div>
-                <div id="caseKpiArrestsPending" class="text-[10px] text-slate-500 truncate">—</div>
+                <div id="caseKpiArrestStatus" class="text-xs font-extrabold text-emerald-400 mt-2">â€”</div>
+                <div id="caseKpiArrestsPending" class="text-[10px] text-slate-500 truncate">â€”</div>
               </div>
 
               <!-- Chargesheet Status Card -->
               <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex flex-col justify-between shadow-sm min-h-[100px]">
                 <span class="text-[9px] uppercase tracking-wider text-slate-400 font-bold">Chargesheet Status</span>
-                <div id="caseKpiCsStatus" class="text-xs font-extrabold text-amber-500 mt-2">—</div>
-                <div id="caseKpiCsDeadline" class="text-[10px] text-slate-500 truncate">—</div>
+                <div id="caseKpiCsStatus" class="text-xs font-extrabold text-amber-500 mt-2">â€”</div>
+                <div id="caseKpiCsDeadline" class="text-[10px] text-slate-500 truncate">â€”</div>
               </div>
             </div>
 
@@ -616,20 +647,20 @@ tailwind.config = {
             </h3>
             <div class="flex flex-col gap-3">
               <button id="caseActionFindLinked" class="w-full py-2.5 px-4 rounded-xl bg-accent hover:bg-blue-500 text-white font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm">
-                <span>🔍</span> Find Linked FIRs
+                <span>ðŸ”</span> Find Linked FIRs
               </button>
               <button id="caseActionViewNetwork" class="w-full py-2.5 px-4 rounded-xl bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-200 font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm">
-                <span>🔗</span> View Network
+                <span>ðŸ”—</span> View Network
               </button>
 
               <button id="caseActionExportPdf" class="w-full py-2.5 px-4 rounded-xl bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-200 font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm">
-                <span>📥</span> Export PDF
+                <span>ðŸ“¥</span> Export PDF
               </button>
               <button id="caseActionCollab" class="w-full py-2.5 px-4 rounded-xl bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-200 font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm" onclick="alert('Collaboration request dispatched to Inspector.')">
-                <span>👥</span> Request Collaboration
+                <span>ðŸ‘¥</span> Request Collaboration
               </button>
               <button id="caseActionAlert" class="w-full py-2.5 px-4 rounded-xl bg-ink-700 hover:bg-ink-600 border border-ink-600 text-slate-200 font-bold text-xs transition flex items-center justify-center gap-2 shadow-sm" onclick="alert('Alert set for case status changes.')">
-                <span>🔔</span> Set Alert
+                <span>ðŸ””</span> Set Alert
               </button>
             </div>
           </aside>
@@ -730,10 +761,10 @@ tailwind.config = {
           <!-- Emerging Hotspots Warning Alert -->
           <div id="hsWarningBanner" class="bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-xl p-3 px-4 flex items-center justify-between text-xs font-semibold shadow-sm shrink-0">
             <div class="flex items-center gap-2">
-              <span class="text-sm">⚠️</span>
+              <span class="text-sm">âš ï¸</span>
               <span><strong>3 EMERGING HOTSPOTS REQUIRE ADDITIONAL PATROL COVERAGE:</strong> Focus on P.S. Halasuru Gate, P.S. Indiranagar, and P.S. Banaswadi. <span class="underline cursor-pointer" onclick="setHotspotLevel('station')">(Click to investigate)</span></span>
             </div>
-            <button onclick="document.getElementById('hsWarningBanner').remove()" class="text-amber-500 hover:text-white transition font-bold">✕</button>
+            <button onclick="document.getElementById('hsWarningBanner').remove()" class="text-amber-500 hover:text-white transition font-bold">âœ•</button>
           </div>
 
           <!-- Map Box -->
@@ -755,13 +786,13 @@ tailwind.config = {
               </div>
               <!-- Dynamically populated by updateHotspotLegend() -->
               <div id="hotspotLegendContent" class="flex flex-col gap-1.5">
-                <div class="text-[9px] text-slate-500 italic">Loading data…</div>
+                <div class="text-[9px] text-slate-500 italic">Loading dataâ€¦</div>
               </div>
             </div>
 
             <!-- Locate control button -->
             <button onclick="if(hotspotMap) hotspotMap.setView([14.5, 76.2], 7)" class="absolute top-16 left-4 z-[1000] w-8 h-8 rounded-lg bg-ink-900 border border-ink-600 flex items-center justify-center hover:bg-ink-700/50 hover:text-white transition shadow-sm text-xs font-bold" title="Recenter Map">
-              📍
+              ðŸ“
             </button>
           </div>
 
@@ -771,7 +802,7 @@ tailwind.config = {
               <span class="text-slate-400">Time Travel Timeline</span>
               <div class="flex items-center gap-1 text-slate-200">
                 <span>Last 30 Days</span>
-                <span class="text-[9px] text-slate-500">📅</span>
+                <span class="text-[9px] text-slate-500">ðŸ“…</span>
               </div>
             </div>
             
@@ -863,7 +894,7 @@ tailwind.config = {
           <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex items-center justify-between shadow-sm">
             <div class="flex flex-col gap-1">
               <span class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Total FIRs</span>
-              <span id="trendStatTotal" class="text-2xl font-extrabold text-slate-100 tracking-tight">—</span>
+              <span id="trendStatTotal" class="text-2xl font-extrabold text-slate-100 tracking-tight">â€”</span>
               <span id="trendStatTotalDelta" class="text-[10px] text-emerald-400 font-bold">+12% MoM</span>
             </div>
             <div class="w-[80px] h-[35px] shrink-0">
@@ -875,7 +906,7 @@ tailwind.config = {
           <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex items-center justify-between shadow-sm">
             <div class="flex flex-col gap-1">
               <span class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">MoM Change</span>
-              <span id="trendStatMoM" class="text-2xl font-extrabold text-slate-100 tracking-tight">—</span>
+              <span id="trendStatMoM" class="text-2xl font-extrabold text-slate-100 tracking-tight">â€”</span>
               <span id="trendStatMoMCategory" class="text-[10px] text-amber-500 font-bold">Burglary</span>
             </div>
             <div class="w-[80px] h-[35px] shrink-0">
@@ -887,7 +918,7 @@ tailwind.config = {
           <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex items-center justify-between shadow-sm">
             <div class="flex flex-col gap-1">
               <span class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Detection Rate</span>
-              <span id="trendStatDetection" class="text-2xl font-extrabold text-slate-100 tracking-tight">—</span>
+              <span id="trendStatDetection" class="text-2xl font-extrabold text-slate-100 tracking-tight">â€”</span>
               <span id="trendStatDetectionDelta" class="text-[10px] text-emerald-400 font-bold">+2%</span>
             </div>
             <div class="w-[80px] h-[35px] shrink-0">
@@ -899,7 +930,7 @@ tailwind.config = {
           <div class="bg-ink-900 border border-ink-600 rounded-xl p-4 flex items-center justify-between shadow-sm">
             <div class="flex flex-col gap-1">
               <span class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Chargesheet Rate</span>
-              <span id="trendStatChargesheet" class="text-2xl font-extrabold text-slate-100 tracking-tight">—</span>
+              <span id="trendStatChargesheet" class="text-2xl font-extrabold text-slate-100 tracking-tight">â€”</span>
               <span id="trendStatChargesheetDelta" class="text-[10px] text-emerald-400 font-bold">+4%</span>
             </div>
             <div class="w-[80px] h-[35px] shrink-0">
@@ -987,10 +1018,10 @@ tailwind.config = {
           </div>
           <div class="flex gap-2">
             <button id="auditRefreshBtn" class="flex items-center gap-1.5 px-3.5 py-2 bg-ink-900 border border-ink-600 hover:bg-ink-700 hover:border-ink-500 rounded-lg text-xs font-semibold text-slate-200 transition">
-              <span>🔄</span> <span>Refresh Logs</span>
+              <span>ðŸ”„</span> <span>Refresh Logs</span>
             </button>
             <button id="auditExportBtn" class="flex items-center gap-1.5 px-3.5 py-2 bg-ink-900 border border-ink-600 hover:bg-ink-700 hover:border-ink-500 rounded-lg text-xs font-semibold text-slate-200 transition">
-              <span>📥</span> <span>Log Export</span>
+              <span>ðŸ“¥</span> <span>Log Export</span>
             </button>
           </div>
         </div>
@@ -999,7 +1030,7 @@ tailwind.config = {
         <div class="bg-ink-900/40 border border-ink-600/40 rounded-xl p-5 mb-6 shadow-sm">
           <div class="text-[10px] uppercase font-bold tracking-wider text-slate-400 mb-3">AUDIT CONTROLS</div>
           <div class="flex flex-wrap items-center gap-3">
-            <input id="auditFir" class="flex-1 min-w-[280px] max-w-md px-3.5 py-2 rounded-lg bg-ink-950 border border-ink-600 outline-none focus:border-accent text-xs text-slate-200" data-i18n-placeholder="audit.placeholder" placeholder="Reverse lookup: FIR / CrimeNo (e.g. 1044300062026…)" />
+            <input id="auditFir" class="flex-1 min-w-[280px] max-w-md px-3.5 py-2 rounded-lg bg-ink-950 border border-ink-600 outline-none focus:border-accent text-xs text-slate-200" data-i18n-placeholder="audit.placeholder" placeholder="Reverse lookup: FIR / CrimeNo (e.g. 1044300062026â€¦)" />
             <button id="auditFirBtn" class="px-4 py-2 rounded-lg bg-ink-800 border border-ink-600 hover:bg-ink-700 text-xs font-semibold text-slate-200 transition" data-i18n="audit.who">Who touched this FIR?</button>
             <button id="auditAllBtn" class="px-4 py-2 rounded-lg bg-ink-800 border border-ink-600 hover:bg-ink-700 text-xs font-semibold text-slate-200 transition" data-i18n="audit.clearFilter">Clear Filter</button>
           </div>
@@ -1017,7 +1048,7 @@ tailwind.config = {
           <span class="text-xs font-bold text-slate-300 tracking-wider uppercase">Chat History</span>
           <div class="flex items-center gap-2">
             <button id="newChatBtn" class="px-2.5 py-1 rounded-full bg-accent hover:bg-blue-600 text-white text-[10px] font-bold transition shrink-0">New Chat</button>
-            <button id="closeHistoryModalBtn" class="w-6 h-6 rounded-full bg-ink-700 hover:bg-ink-600 text-slate-300 flex items-center justify-center text-xs transition">✕</button>
+            <button id="closeHistoryModalBtn" class="w-6 h-6 rounded-full bg-ink-700 hover:bg-ink-600 text-slate-300 flex items-center justify-center text-xs transition">âœ•</button>
           </div>
         </div>
         <div id="chatHistoryList" class="flex-1 overflow-y-auto p-4 space-y-2.5 scrollbar-thin min-h-[200px]">
@@ -1037,3 +1068,4 @@ tailwind.config = {
 <script src="./app.js"></script>
 </body>
 </html>
+

@@ -3,10 +3,10 @@
 Deterministic (RNG seeded). Emits every table described in
 Police_FIR_ER_Diagram.pdf plus DistrictGeo / PersonAlias / audit_log.
 
-Scale (roughly matches a single-year district snapshot):
+Scale (roughly matches a two-year statewide snapshot):
   15 districts, ~90 units, ~200 officers, ~30 courts, 20 crime-heads,
-  ~30 sections, 1800 FIRs, ~2700 accused, ~1500 arrests,
-  ~600 chargesheets, ~1800 complainants, ~1500 victims.
+  ~30 sections, 5000 FIRs, ~7500 accused, ~4200 arrests,
+  ~1700 chargesheets, ~5000 complainants, ~4200 victims.
 """
 from __future__ import annotations
 
@@ -271,7 +271,7 @@ def _crime_no(cat_code: int, district_id: int, unit_id: int,
 # ============================================================
 # Main seed
 # ============================================================
-def seed(*, n_cases: int = 1800) -> None:
+def seed(*, n_cases: int = 5000) -> None:
     init_schema()
     if is_seeded():
         return
@@ -536,6 +536,25 @@ def seed(*, n_cases: int = 1800) -> None:
         next_complainant_id = 1
         next_victim_id = 1
 
+        # Weighted crime-head distribution — ensures all 8 categories
+        # have meaningful monthly volumes in the trends chart.
+        # Weights roughly match NCRB Karnataka proportions.
+        CRIME_HEAD_WEIGHTS = {
+            1: 0.22,  # Crimes Against Body
+            2: 0.20,  # Crimes Against Property
+            3: 0.08,  # Crimes Against Public Order
+            4: 0.12,  # Cyber Crimes
+            5: 0.10,  # Narcotic Drug Crimes
+            6: 0.08,  # Economic / White-Collar Crimes
+            7: 0.12,  # Crimes Against Women
+            8: 0.08,  # Crimes Against Children
+        }
+        head_ids = list(CRIME_HEAD_WEIGHTS.keys())
+        head_wts = list(CRIME_HEAD_WEIGHTS.values())
+        subheads_by_head = {}
+        for sh in CRIME_SUBHEADS:
+            subheads_by_head.setdefault(sh[1], []).append(sh)
+
         # Track (district, unit, year, category) counters for CrimeNo serial.
         serials: dict[tuple, int] = {}
 
@@ -547,7 +566,9 @@ def seed(*, n_cases: int = 1800) -> None:
                 weights=[0.82, 0.06, 0.04, 0.08],
             )[0]
             district_id = RNG.choices(district_ids, weights=district_weights)[0]
-            subhead = RNG.choice(CRIME_SUBHEADS)
+            # Two-step weighted selection: pick crime head, then subhead
+            chosen_head = RNG.choices(head_ids, weights=head_wts)[0]
+            subhead = RNG.choice(subheads_by_head[chosen_head])
             sh_id, ch_id, sh_name, indicative_grav = subhead
 
             # Cyber subhead? use the cyber cell rather than a normal PS.

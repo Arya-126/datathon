@@ -20,6 +20,7 @@
     background-color: #18202c !important;
     color: #e2e8f0 !important;
   }
+  /* Animated thinking dots */
   .thinking-dots { display: inline-flex; gap: 4px; align-items: center; height: 20px; }
   .thinking-dots span {
     width: 6px; height: 6px; border-radius: 50%; background: #94a3b8;
@@ -31,6 +32,7 @@
     0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
     40% { opacity: 1; transform: scale(1.2); }
   }
+  /* Skeleton loading shimmer */
   .skeleton {
     background: linear-gradient(90deg, #252f3e 25%, #2d3748 50%, #252f3e 75%);
     background-size: 200% 100%;
@@ -45,6 +47,7 @@
   .skeleton-line { height: 12px; margin-bottom: 8px; }
   .skeleton-line.short { width: 60%; }
   .skeleton-chart { height: 200px; }
+  /* Responsive */
   @media (max-width: 1024px) {
     #appSidebar { position: fixed; left: -240px; z-index: 40; transition: left 0.3s ease; }
     #appSidebar.open { left: 0; }
@@ -58,6 +61,7 @@
     header { flex-wrap: wrap; gap: 8px; }
     .hidden.md\:flex { display: none !important; }
   }
+  /* Light theme overrides */
   body.light-theme { background: #f1f5f9 !important; color: #1e293b !important; }
   body.light-theme .bg-ink-900,
   body.light-theme .bg-ink-950 { background: #f8fafc !important; }
@@ -79,18 +83,23 @@
     background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
     background-size: 200% 100%;
   }
+  /* Light theme — sidebar & nav */
   body.light-theme .nav-btn { color: #475569 !important; }
   body.light-theme .nav-btn:hover { background: #e2e8f0 !important; color: #0f172a !important; }
   body.light-theme .nav-btn.active { background: #dbeafe !important; color: #1e40af !important; border-left-color: #3b82f6 !important; }
+  /* Light theme — inputs, cards, chat */
   body.light-theme input,
   body.light-theme select,
   body.light-theme textarea { background: #f1f5f9 !important; color: #1e293b !important; border-color: #cbd5e1 !important; }
   body.light-theme .msg.bot { background: #f1f5f9 !important; border-color: #cbd5e1 !important; color: #334155 !important; }
   body.light-theme .msg { color: #1e293b !important; }
+  /* Light theme — shadows & misc */
   body.light-theme .shadow-sm { box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important; }
   body.light-theme .shadow-lg { box-shadow: 0 4px 12px rgba(0,0,0,0.08) !important; }
   body.light-theme .shadow-2xl { box-shadow: 0 8px 24px rgba(0,0,0,0.1) !important; }
+  /* Light theme — login overlay */
   body.light-theme #login { background: rgba(241,245,249,0.95) !important; }
+  /* Theme toggle switch */
   .theme-switch {
     position: relative; width: 48px; height: 24px; border-radius: 12px;
     background: #2d3748; border: 1px solid #475569; cursor: pointer;
@@ -170,12 +179,24 @@ tailwind.config = {
       <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Investigating Officer</label>
       <select id="loginEmployee" class="w-full mb-4 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 outline-none"></select>
     </div>
-    <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Demo Password <span class="normal-case text-slate-500">(only if configured)</span></label>
-    <input id="loginPassword" type="password" class="w-full mb-4 px-3 py-2 rounded-lg bg-ink-900 border border-ink-600 focus:border-accent outline-none" placeholder="leave blank if none" />
+    <label class="block text-xs uppercase tracking-wider text-slate-400 mb-1">Password</label>
+    <div class="relative mb-2">
+      <input id="loginPassword" type="password" class="w-full px-3 py-2 pr-10 rounded-lg bg-ink-900 border border-ink-600 focus:border-accent outline-none text-slate-100" placeholder="Enter password" />
+      <button type="button" id="togglePasswordBtn" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 focus:outline-none transition p-1" title="Show/Hide password">
+        <svg id="eyeIconShow" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+        </svg>
+        <svg id="eyeIconHide" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858-5.908a10.025 10.025 0 013.682-.792c4.478 0 8.268 2.943 9.542 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21M3 3l18 18"></path>
+        </svg>
+      </button>
+    </div>
+    <div id="loginErrorMsg" class="hidden text-xs text-rose-400 mb-3 font-medium bg-rose-950/40 border border-rose-800/50 rounded-lg px-3 py-2 flex items-center gap-1.5">
+      <span>⚠️</span> <span id="loginErrorText"></span>
+    </div>
     <button id="loginBtn" class="w-full mt-2 bg-accent hover:bg-blue-500 text-white font-medium py-2.5 rounded-lg transition">Enter</button>
-    <p class="text-[11px] text-slate-500 mt-4 leading-relaxed">
-      Role-based access is enforced in the query layer. Every action is written to an audit trail. Analyst sessions cannot project PII columns; IO sessions only see their own cases.
-    </p>
+    
   </div>
 </div>
 
@@ -186,7 +207,7 @@ tailwind.config = {
   <aside id="appSidebar" class="w-60 shrink-0 bg-ink-900 border-r border-ink-600 flex flex-col justify-between transition-all duration-300">
     <div class="flex flex-col flex-1">
       <div class="px-5 py-4 border-b border-ink-600 flex items-center gap-2">
-        <img src="/static/logo.jpg" class="w-8 h-8 rounded-full border border-kspGold/50 object-cover" alt="KSP Logo" />
+        <img src="/static/logo.png" class="w-8 h-8 rounded-full border border-kspGold/50 object-cover" alt="KSP Logo" />
         <div>
           <div class="text-xs font-bold leading-tight uppercase tracking-wider text-slate-100">AVALOKANA</div>
           <div class="text-[9px] text-slate-400 tracking-widest uppercase">CRIME AI PORTAL</div>
@@ -208,6 +229,9 @@ tailwind.config = {
         </button>
         <button data-view="predict" class="nav-btn flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-slate-300 hover:bg-ink-700/50 hover:text-white transition duration-150" data-i18n="nav.predict">
           <span class="text-sm">⚡</span> <span class="tracking-wide">Predictions</span>
+        </button>
+        <button data-view="network" class="nav-btn flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-slate-300 hover:bg-ink-700/50 hover:text-white transition duration-150" data-i18n="nav.network">
+          <span class="text-sm">🔗</span> <span class="tracking-wide">Criminal Network</span>
         </button>
         <button data-view="insights" class="nav-btn flex items-center gap-2.5 w-full text-left px-3 py-2.5 rounded-lg text-slate-300 hover:bg-ink-700/50 hover:text-white transition duration-150" data-i18n="nav.insights">
           <span class="text-sm">📄</span> <span class="tracking-wide">Reports</span>
@@ -234,9 +258,11 @@ tailwind.config = {
 
       <!-- User Controls & Language Toggle -->
       <div class="flex items-center gap-4 text-xs font-semibold">
+        <!-- Hamburger (mobile) -->
         <button id="hamburgerBtn" class="hidden w-8 h-8 rounded-lg bg-ink-700/50 hover:bg-ink-700 border border-ink-600 items-center justify-center text-slate-300 transition" title="Menu" style="display:none">
           <span class="text-base">☰</span>
         </button>
+        <!-- Theme toggle -->
         <div id="themeToggleBtn" class="theme-switch" title="Toggle Light/Dark Mode">
           <div class="switch-knob" id="themeIcon">🌙</div>
         </div>
@@ -249,10 +275,14 @@ tailwind.config = {
         </div>
         
         <!-- Notification bell -->
-        <button class="relative w-8 h-8 rounded-lg bg-ink-700/50 hover:bg-ink-700 border border-ink-600 flex items-center justify-center text-slate-300 transition">
+        <button id="notificationBellBtn" class="relative w-8 h-8 rounded-lg bg-ink-700/50 hover:bg-ink-700 border border-ink-600 flex items-center justify-center text-slate-300 transition" title="Spike warnings">
           <span>🔔</span>
-          <span class="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-red-500 rounded-full"></span>
+          <span id="notificationBadge" class="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-red-500 rounded-full hidden"></span>
         </button>
+        <div id="notificationDropdown" class="absolute top-12 right-16 w-80 bg-ink-800 border border-ink-600 rounded-xl shadow-2xl z-50 hidden overflow-hidden">
+          <div class="px-4 py-2.5 border-b border-ink-600 text-[10px] font-bold uppercase tracking-widest text-slate-400">Active Warnings</div>
+          <div id="notificationList" class="max-h-64 overflow-y-auto p-2 space-y-1.5 text-xs"></div>
+        </div>
 
         <!-- User avatar dropdown -->
         <div class="flex items-center gap-2.5 pl-4 border-l border-ink-600">
@@ -353,7 +383,7 @@ tailwind.config = {
       </section>
 
       <!-- VIEW: CASES -->
-      <section id="view-cases" class="view hidden flex-grow h-full overflow-hidden bg-ink-950 relative">
+      <section id="view-cases" class="view hidden flex-grow h-full overflow-hidden bg-ink-950">
         
         <!-- Subview A: Landing View (Full Screen Cases List) -->
         <div id="caseLandingView" class="flex flex-col h-full overflow-hidden p-6 space-y-4 w-full">
